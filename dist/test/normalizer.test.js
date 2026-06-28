@@ -7,3 +7,17 @@ test('detects headers away from top and multiple grade blocks without fixed row 
 test('normalizes G1 with 1학년 and G7E with G7-1(E)', () => { const d = normalizeWorkbook(parsed({ '학생별 학년': [['학년', '학생'], ['1학년', 'A'], ['G7-1(E)', 'B']], 교사별: [['T'], ['학년', '수업', '주당 시간', '주 횟수'], ['G1', 'Math', 1, 1], ['G7E', 'English', 1, 1]] })); assert(d.grades.some(g => g.name === 'G1')); assert(d.grades.some(g => g.name === 'G7E')); assert.equal(d.requirements.length, 2); assert.equal(d.diagnostics.needsMapping.length, 0); });
 test('zero CourseRequirement is an error and blocks generation path', () => { const d = normalizeWorkbook(parsed({ '학년별': [['수업', '시간'], ['bad', 1]] })); assert.equal(d.requirements.length, 0); assert(d.errors.some(e => e.code === 'no-course-requirements')); });
 test('shared cohort is not duplicated and source reference is preserved', () => { const d = normalizeWorkbook(parsed({ '학생별 학년': [['학년', '학생'], ['G1', 'A'], ['G2', 'B']], 교사별: [['T'], ['학년', '수업', '주당 시간', '주 횟수'], ['G1,G2', 'Choir', 2, 1], ['G1,G2', 'Band', 1, 1]] })); assert.equal(d.cohorts.filter(c => c.name === 'G1+G2').length, 1); assert(d.requirements.every(r => r.source?.sheetName === '교사별')); });
+test('new 학년별 format parses four-column teacher rules and rule rows', () => {
+    const d = normalizeWorkbook(parsed({ '학년별': [
+            ['풀타임 교사', '이은총, 홍성혜'], ['8교시 고정수업', 'G1 Handwriting'], ['고정수업', '예배 - 월요일 1교시'], ['오후 선호 수업', 'G1-12 체육'],
+            ['G1'], ['수업', '시간', '횟수', '교사'], ['예배', 1, 1, '모든 교사'], ['Handwriting', 1, 1, '가능한 풀타임 교사'], ['체육', 2, 1, '없음'], ['합계', 4],
+            ['G2'], ['수업', '시간', '횟수', '교사'], ['예배', 1, 1, '모든 교사'], ['합계', 1]
+        ] }));
+    assert.equal(d.grades.length, 2);
+    assert(d.diagnostics.fullTimeTeacherIds?.length === 2);
+    assert(d.requirements.some(r => r.teacherRule?.type === 'choose-one' && r.afterSchool));
+    assert(d.constraints.some(c => c.type === 'fixed-slot'));
+    assert(d.constraints.some(c => c.type === 'preferred-period-range'));
+    assert(d.requirements.every(r => r.source?.cellAddresses?.length === 4));
+});
+test('teacher field semantics normalize without fictional local teachers', () => { const rows = [['G1'], ['수업', '시간', '횟수', '교사'], ['A', 1, 1, '홍인숙 목사님, 고영찬'], ['B', 1, 1, '모든 교사'], ['C', 1, 1, '가능한 풀타임 교사'], ['D', 1, 1, '각 홈룸 교사'], ['E', 1, 1, '학생회 담당 교사'], ['F', 1, 1, '없음'], ['G', 1, 1, '온라인'], ['합계', 7]]; const d = normalizeWorkbook(parsed({ '학년별': [['풀타임 교사', '고영찬'], ...rows] })); const rules = d.requirements.map(r => r.teacherRule?.type); assert(rules.includes('fixed')); assert(rules.includes('all-teachers')); assert(rules.includes('choose-one')); assert(rules.includes('role')); assert(rules.includes('none')); assert(rules.includes('external')); assert(!d.teachers.some(t => t.name === '모든 교사' || t.name === '없음' || t.name === '온라인')); });

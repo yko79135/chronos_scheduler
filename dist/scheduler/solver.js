@@ -1,13 +1,24 @@
 import { crossesLunch, regularSlotKeys, slotDay, slotPeriod, slotRange } from './time.js';
-export function expandInstances(reqs, data) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => { const cohortStudents = (r.cohortIds ?? []).flatMap(id => data?.cohorts.find(c => c.id === id)?.studentIds ?? []); const gradeStudents = (r.gradeIds ?? []).flatMap(id => data?.grades.find(g => g.id === id)?.studentIds ?? []); return { id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds ?? [], cohortIds: r.cohortIds ?? [], studentIds: [...new Set([...cohortStudents, ...gradeStudents])], teacherIds: r.teacherIds, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool }; })); }
-function canPlace(a, inst, start, data) { const reasons = []; const slots = slotRange(start, inst.length); if (crossesLunch(start, inst.length))
+export function expandInstances(reqs, data) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => { const cohortStudents = (r.cohortIds ?? []).flatMap(id => data?.cohorts.find(c => c.id === id)?.studentIds ?? []); const gradeStudents = (r.gradeIds ?? []).flatMap(id => data?.grades.find(g => g.id === id)?.studentIds ?? []); return { id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds ?? [], cohortIds: r.cohortIds ?? [], studentIds: [...new Set([...cohortStudents, ...gradeStudents])], teacherIds: r.teacherIds, teacherRule: r.teacherRule, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool }; })); }
+function effectiveTeacherIds(inst, data, placed, start) { if (!inst.teacherRule)
+    return inst.teacherIds; if (inst.teacherRule.type === 'fixed')
+    return inst.teacherRule.teacherIds; if (inst.teacherRule.type === 'none' || inst.teacherRule.type === 'external')
+    return []; if (inst.teacherRule.type === 'all-teachers')
+    return data.teachers.filter(t => t.category !== 'external').map(t => t.id); if (inst.teacherRule.type === 'choose-one') {
+    const slots = slotRange(start, inst.length);
+    return [inst.teacherRule.candidateTeacherIds.find(t => !placed.some(a => a.teacherIds.includes(t) && slotRange(a.slot, a.length).some(s => slots.includes(s)))) ?? inst.teacherRule.candidateTeacherIds[0]].filter(Boolean);
+} if (inst.teacherRule.type === 'role') {
+    const mapped = data.roleMappings?.[inst.teacherRule.roleId];
+    return mapped ? [mapped] : [];
+} return inst.teacherIds; }
+function canPlace(a, inst, start, data) { const reasons = []; const slots = slotRange(start, inst.length); const teachers = effectiveTeacherIds(inst, data, a, start); if (crossesLunch(start, inst.length))
     reasons.push('점심시간을 가로지르는 연속수업'); if (!inst.afterSchool && slots.some(s => slotPeriod(s) > 7))
     reasons.push('정규수업은 8교시에 배치할 수 없음'); if (inst.afterSchool && slots.some(s => slotPeriod(s) !== 8))
     reasons.push('방과후 수업은 8교시에만 배치'); for (const s of slots) {
     for (const x of a) {
         if (!slotRange(x.slot, x.length).includes(s))
             continue;
-        if (inst.teacherIds.some(t => x.teacherIds.includes(t)))
+        if (teachers.some(t => x.teacherIds.includes(t)))
             reasons.push(`교사 충돌 ${s}`);
         if (inst.studentIds.length && x.studentIds.length ? inst.studentIds.some(st => x.studentIds.includes(st)) : inst.gradeIds.some(g => x.gradeIds.includes(g)))
             reasons.push(`참여자 충돌 ${s}`);
@@ -33,12 +44,12 @@ export function solveSchedule(data, opt) { const start = Date.now(); let nodes =
     return true; const inst = all[idx]; const sorted = candidates(inst, data).sort((a, b) => slotPeriod(a) - slotPeriod(b)); for (const s of sorted) {
     const why = canPlace(placed, inst, s, data);
     if (why.length === 0) {
-        const asn = { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: inst.teacherIds, roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds };
+        const asn = { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: effectiveTeacherIds(inst, data, placed, s), roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds };
         if (search(idx + 1, [...placed, asn]))
             return true;
     }
 } backtracks++; return opt.allowUnassigned ? search(idx + 1, placed) : false; } search(0, []); const assigned = new Set(best.map(a => a.instanceId)); const unassigned = all.filter(i => !assigned.has(i.id)); for (const u of unassigned) {
     const reasons = candidates(u, data).flatMap(s => canPlace(best, u, s, data));
     issues.push({ level: 'error', code: 'unassigned', message: `${u.id} 배정 실패: ${[...new Set(reasons)].slice(0, 4).join(', ') || '가능 후보 없음'}` });
-} return { assignments: best, unassigned, issues, score: score(best), progress: { elapsedMs: Date.now() - start, nodes, backtracks, assigned: best.length, total: all.length, unassigned: unassigned.length, bestScore: score(best), reason: unassigned.length ? 'partial-or-limit' : 'complete' } }; }
+} return { assignments: best, unassigned, issues, score: score(best), progress: { elapsedMs: Date.now() - start, nodes, backtracks, assigned: best.length, total: all.length, unassigned: unassigned.length, bestScore: score(best), reason: unassigned.length ? 'partial-or-limit' : 'complete', seed: opt.seed } }; }
 export { canPlace };

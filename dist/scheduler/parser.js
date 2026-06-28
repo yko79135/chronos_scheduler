@@ -1,4 +1,5 @@
-export async function parseWorkbookFile(file) { const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true, cellDates: false }); const sheets = {}, merges = {}, warnings = []; for (const name of wb.SheetNames) {
+export async function parseWorkbookFile(file) { if (typeof XLSX === 'undefined')
+    throw new Error('Excel 라이브러리(SheetJS CDN)를 불러오지 못했습니다. 네트워크를 확인한 뒤 다시 시도하세요.'); const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellStyles: true, cellDates: false }); const sheets = {}, merges = {}, warnings = []; for (const name of wb.SheetNames) {
     const ws = wb.Sheets[name];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }).map(r => r.map(v => ({ v: typeof v === 'string' ? v.trim() : v })));
     sheets[name] = rows;
