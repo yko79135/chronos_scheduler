@@ -1,0 +1,1 @@
+{"type":"module","scripts":{"dev":"python3 -m http.server 5173","build":"tsc -p tsconfig.json","test":"node --test dist/test/*.test.js","lint":"tsc -p tsconfig.json --noEmit"},"dependencies":{},"devDependencies":{}}
