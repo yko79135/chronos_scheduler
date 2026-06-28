@@ -1,5 +1,5 @@
 import { crossesLunch, regularSlotKeys, slotDay, slotPeriod, slotRange } from './time.js';
-export function expandInstances(reqs) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => ({ id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds, teacherIds: r.teacherIds, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool }))); }
+export function expandInstances(reqs, data) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => { const cohortStudents = (r.cohortIds ?? []).flatMap(id => data?.cohorts.find(c => c.id === id)?.studentIds ?? []); const gradeStudents = (r.gradeIds ?? []).flatMap(id => data?.grades.find(g => g.id === id)?.studentIds ?? []); return { id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds ?? [], cohortIds: r.cohortIds ?? [], studentIds: [...new Set([...cohortStudents, ...gradeStudents])], teacherIds: r.teacherIds, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool }; })); }
 function canPlace(a, inst, start, data) { const reasons = []; const slots = slotRange(start, inst.length); if (crossesLunch(start, inst.length))
     reasons.push('점심시간을 가로지르는 연속수업'); if (!inst.afterSchool && slots.some(s => slotPeriod(s) > 7))
     reasons.push('정규수업은 8교시에 배치할 수 없음'); if (inst.afterSchool && slots.some(s => slotPeriod(s) !== 8))
@@ -9,8 +9,8 @@ function canPlace(a, inst, start, data) { const reasons = []; const slots = slot
             continue;
         if (inst.teacherIds.some(t => x.teacherIds.includes(t)))
             reasons.push(`교사 충돌 ${s}`);
-        if (inst.gradeIds.some(g => x.gradeIds.includes(g)))
-            reasons.push(`학년 충돌 ${s}`);
+        if (inst.studentIds.length && x.studentIds.length ? inst.studentIds.some(st => x.studentIds.includes(st)) : inst.gradeIds.some(g => x.gradeIds.includes(g)))
+            reasons.push(`참여자 충돌 ${s}`);
         if (inst.roomId && x.roomId && inst.roomId === x.roomId)
             reasons.push(`교실 충돌 ${s}`);
     }
@@ -27,13 +27,13 @@ function score(a) { let p = 0; const byKey = new Map(); for (const x of a) {
     p += 10; v.sort((a, b) => a - b); for (let i = 1; i < v.length; i++)
     if (v[i] - v[i - 1] > 1)
         p += 1; }); return -p; }
-export function solveSchedule(data, opt) { const start = Date.now(); let nodes = 0, backtracks = 0; const issues = []; const all = expandInstances(data.requirements).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); let best = []; function search(idx, placed) { nodes++; if (nodes > opt.maxNodes || Date.now() - start > opt.maxSeconds * 1000)
+export function solveSchedule(data, opt) { const start = Date.now(); let nodes = 0, backtracks = 0; const issues = []; const all = expandInstances(data.requirements, data).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); let best = []; function search(idx, placed) { nodes++; if (nodes > opt.maxNodes || Date.now() - start > opt.maxSeconds * 1000)
     return false; if (placed.length > best.length || (placed.length === best.length && score(placed) > score(best)))
     best = [...placed]; if (idx >= all.length)
     return true; const inst = all[idx]; const sorted = candidates(inst, data).sort((a, b) => slotPeriod(a) - slotPeriod(b)); for (const s of sorted) {
     const why = canPlace(placed, inst, s, data);
     if (why.length === 0) {
-        const asn = { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: inst.teacherIds, roomId: inst.roomId };
+        const asn = { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: inst.teacherIds, roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds };
         if (search(idx + 1, [...placed, asn]))
             return true;
     }
