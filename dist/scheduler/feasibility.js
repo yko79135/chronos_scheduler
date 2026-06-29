@@ -16,6 +16,7 @@ export function analyzeFeasibility(data) {
     const mk = (id, name) => ({ id, name, regularRequired: 0, period8Required: 0, regularCapacity, period8Capacity, regularOverload: 0, period8Overload: 0, contributions: [] });
     const grades = new Map(data.grades.map(g => [g.id, mk(g.id, g.name)]));
     const teachers = new Map(data.teachers.map(t => [t.id, mk(t.id, t.name)]));
+    let chooseOneRegular = 0, chooseOneP8 = 0;
     for (const r of data.requirements) {
         const p = periodsOf(r), p8 = isP8(r), c = { requirementId: r.id, label: label(r, data), periods: p, slots: [...r.fixedSlots, ...r.allowedSlots] };
         for (const g of r.gradeIds) {
@@ -34,8 +35,15 @@ export function analyzeFeasibility(data) {
                 l.contributions.push({ ...c, periods: teacherWork });
             }
         }
-        if (r.teacherRule?.type === 'choose-one')
-            issues.push({ level: 'warning', code: 'choose-one-workload', message: `${r.id} choose-one workload ${p} periods is distributable among ${(r.teacherRule.candidateTeacherIds ?? []).join(', ')}` });
+        if (r.teacherRule?.type === 'choose-one') {
+            p8 ? chooseOneP8 += p : chooseOneRegular += p;
+            const caps = (r.teacherRule.candidateTeacherIds ?? []).map(id => teachers.get(id)).filter(Boolean);
+            const remaining = caps.reduce((n, l) => n + (p8 ? Math.max(0, l.period8Capacity - l.period8Required) : Math.max(0, l.regularCapacity - l.regularRequired)), 0);
+            if (remaining < p)
+                issues.push({ level: 'error', code: 'choose-one-capacity-overload', message: `${r.id} choose-one pool lacks capacity: needs ${p}, remaining ${remaining} among ${(r.teacherRule.candidateTeacherIds ?? []).join(', ')}` });
+            else
+                issues.push({ level: 'warning', code: 'choose-one-workload', message: `${r.id} choose-one workload ${p} periods; pool remaining capacity ${remaining} among ${(r.teacherRule.candidateTeacherIds ?? []).join(', ')}` });
+        }
         if (possibleStarts(r).length === 0)
             issues.push({ level: 'error', code: 'zero-candidate-requirement', message: `${label(r, data)} has zero valid candidate slots`, context: { requirementId: r.id } });
         if (isP8(r) && r.meetingsPerWeek > 5)
@@ -72,6 +80,8 @@ export function analyzeFeasibility(data) {
         if (l.regularOverload || l.period8Overload)
             issues.push({ level: 'error', code: 'capacity-overload', message: `${l.name} overloaded regular +${l.regularOverload}, period-8 +${l.period8Overload}` });
     }
-    const score = issues.filter(i => i.level === 'error').length * 100 + issues.filter(i => i.level === 'warning').length;
-    return { gradeLoads: [...grades.values()], teacherLoads: [...teachers.values()], issues, score };
+    const gradeLoads = [...grades.values()], teacherLoads = [...teachers.values()];
+    const metrics = { teacherRegularOverload: teacherLoads.reduce((n, l) => n + l.regularOverload, 0), teacherPeriod8Overload: teacherLoads.reduce((n, l) => n + l.period8Overload, 0), gradeRegularOverload: gradeLoads.reduce((n, l) => n + l.regularOverload, 0), gradePeriod8Overload: gradeLoads.reduce((n, l) => n + l.period8Overload, 0), zeroCandidateRequirements: issues.filter(i => i.code === 'zero-candidate-requirement').length, fixedConflicts: issues.filter(i => i.code.startsWith('fixed-')).length, contradictoryConstraints: issues.filter(i => i.code.startsWith('contradictory-')).length, unresolvedRoleMappings: data.requirements.filter(r => r.status === 'needs-mapping').length, unallocatedChooseOneRegular: Math.max(0, chooseOneRegular), unallocatedChooseOnePeriod8: Math.max(0, chooseOneP8) };
+    const score = metrics.teacherRegularOverload * 10 + metrics.teacherPeriod8Overload * 20 + metrics.gradeRegularOverload * 10 + metrics.gradePeriod8Overload * 20 + metrics.zeroCandidateRequirements * 100 + metrics.fixedConflicts * 100 + metrics.contradictoryConstraints * 100 + metrics.unresolvedRoleMappings * 50 + issues.filter(i => i.level === 'warning').length;
+    return { gradeLoads, teacherLoads, issues, score, metrics };
 }

@@ -2,6 +2,7 @@ import { Cohort, CourseRequirement, GradeGroup, ImportDiagnostics, NormalizedDat
 import { cellText, num, ParsedWorkbook } from './parser.js';
 import { canonicalGradeName, gradeNumber, parseGradeExpression, stableId } from './groupParser.js';
 import { defaultTimeSlots, DAYS } from './time.js';
+import { buildSharedSuggestions } from './sharedCompatibility.js';
 const sub=(name:string):Subject=>({id:stableId('sub',name),name:name.trim(),aliases:[]});
 const mkTeacher=(name:string,cat:'full-time'|'part-time'|'pastor'|'external'='part-time'):Teacher=>({id:stableId('tea',name),name:name.trim(),aliases:[],category:cat,unavailableSlots:[],preferredSlots:[]});
 function splitLengths(total:number,meetings:number):number[]{if(!meetings)return[];const base=Math.floor(total/meetings),rem=total%meetings;return Array.from({length:meetings},(_,i)=>base+(i<rem?1:0)).filter(n=>n>0)}
@@ -43,6 +44,7 @@ export function normalizeWorkbook(p:ParsedWorkbook):NormalizedData{const issues:
   }
  }
  const roleMappings={homeroomByGrade:Object.fromEntries([...grades.keys()].map(g=>[g,''])),studentCouncil:null as string|null};diag.teacherRoles=[...roles];
- const likely=new Set(['과학실험','미술','태권도','Drama','Musical','Debate','G9-12 SS (Online)','학생회','체육']);const bySubject=new Map<string,CourseRequirement[]>();for(const r of reqs.values())bySubject.set(r.subjectId,[...(bySubject.get(r.subjectId)??[]),r]);for(const [k,list] of bySubject){if(list.length>1&&(likely.has(subjects.get(k)?.name??'')||list.some((r:CourseRequirement)=>r.sharedClass)))diag.sharedSuggestions!.push({id:`sug_${k}`,subjectId:k,requirementIds:list.map((r:CourseRequirement)=>r.id),cohortIds:list.flatMap((r:CourseRequirement)=>r.cohortIds),reason:'동일 과목/구조 또는 명시 규칙 기반 공동수업 후보',decision:'separate'});}
+ const previewData={students,grades:[...grades.values()],cohorts:[...cohorts.values()],teachers:[...teachers.values()],subjects:[...subjects.values()],requirements:[...reqs.values()],constraints,rooms:[{id:'room_default',name:'미지정 교실'}],timeSlots:defaultTimeSlots(),warnings:[],errors:[],sourceSheets:p.sheetNames,diagnostics:diag,roleMappings} as NormalizedData;
+ diag.sharedSuggestions=buildSharedSuggestions(previewData);
  diag.detectedSubjectCount=subjects.size;diag.detectedRequirementCount=reqs.size;if(reqs.size===0)issues.push({level:'error',code:'no-course-requirements',message:'학년별 수업 요구사항을 인식하지 못했습니다. 빈 시간표를 생성할 수 없습니다.'});
  return{students,grades:[...grades.values()],cohorts:[...cohorts.values()],teachers:[...teachers.values()],subjects:[...subjects.values()],requirements:[...reqs.values()],constraints,rooms:[{id:'room_default',name:'미지정 교실'}],timeSlots:defaultTimeSlots(),warnings:issues.filter(i=>i.level==='warning'),errors:issues.filter(i=>i.level==='error'),sourceSheets:p.sheetNames,diagnostics:diag,roleMappings};}
