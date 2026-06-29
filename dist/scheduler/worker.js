@@ -1,11 +1,11 @@
 import { solveSchedule } from './solver.js';
 self.onmessage = (event) => { const { data, options, jobId } = event.data; try {
     let last = 0;
-    const started = Date.now();
-    const result = solveSchedule(data, { ...options, now: () => { const n = Date.now(); if (n - last > 250) {
+    let latest;
+    const result = solveSchedule(data, { ...options, onProgress: (progress, snapshot) => { latest = snapshot ?? latest; const n = Date.now(); if (n - last >= 250) {
             last = n;
-            self.postMessage({ type: 'progress', jobId, progress: { elapsedMs: n - started, nodes: 0, bestScore: 0, reason: 'running' } });
-        } return n; } });
+            self.postMessage({ type: 'progress', jobId, progress, snapshot: latest });
+        } } });
     self.postMessage({ type: 'result', jobId, result });
 }
 catch (error) {

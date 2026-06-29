@@ -1,6 +1,7 @@
 import { cellText, num } from './parser.js';
 import { canonicalGradeName, gradeNumber, parseGradeExpression, stableId } from './groupParser.js';
 import { defaultTimeSlots, DAYS } from './time.js';
+import { buildSharedSuggestions } from './sharedCompatibility.js';
 const sub = (name) => ({ id: stableId('sub', name), name: name.trim(), aliases: [] });
 const mkTeacher = (name, cat = 'part-time') => ({ id: stableId('tea', name), name: name.trim(), aliases: [], category: cat, unavailableSlots: [], preferredSlots: [] });
 function splitLengths(total, meetings) { if (!meetings)
@@ -266,14 +267,8 @@ export function normalizeWorkbook(p) {
     }
     const roleMappings = { homeroomByGrade: Object.fromEntries([...grades.keys()].map(g => [g, ''])), studentCouncil: null };
     diag.teacherRoles = [...roles];
-    const likely = new Set(['과학실험', '미술', '태권도', 'Drama', 'Musical', 'Debate', 'G9-12 SS (Online)', '학생회', '체육']);
-    const bySubject = new Map();
-    for (const r of reqs.values())
-        bySubject.set(r.subjectId, [...(bySubject.get(r.subjectId) ?? []), r]);
-    for (const [k, list] of bySubject) {
-        if (list.length > 1 && (likely.has(subjects.get(k)?.name ?? '') || list.some((r) => r.sharedClass)))
-            diag.sharedSuggestions.push({ id: `sug_${k}`, subjectId: k, requirementIds: list.map((r) => r.id), cohortIds: list.flatMap((r) => r.cohortIds), reason: '동일 과목/구조 또는 명시 규칙 기반 공동수업 후보', decision: 'separate' });
-    }
+    const previewData = { students, grades: [...grades.values()], cohorts: [...cohorts.values()], teachers: [...teachers.values()], subjects: [...subjects.values()], requirements: [...reqs.values()], constraints, rooms: [{ id: 'room_default', name: '미지정 교실' }], timeSlots: defaultTimeSlots(), warnings: [], errors: [], sourceSheets: p.sheetNames, diagnostics: diag, roleMappings };
+    diag.sharedSuggestions = buildSharedSuggestions(previewData);
     diag.detectedSubjectCount = subjects.size;
     diag.detectedRequirementCount = reqs.size;
     if (reqs.size === 0)
