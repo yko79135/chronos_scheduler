@@ -1,4 +1,0 @@
-export function saveProject(data, result) { localStorage.setItem('chronos-project', JSON.stringify({ data, result, savedAt: new Date().toISOString() })); }
-export function loadProject() { const raw = localStorage.getItem('chronos-project'); return raw ? JSON.parse(raw) : null; }
-export function exportExcel(data, result) { const wb = XLSX.utils.book_new(); const add = (n, d) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d), n); add('입력_학생', data.students); add('입력_교사', data.teachers); add('입력_학년', data.grades); add('입력_과목', data.subjects); add('입력_수업요구', data.requirements); add('학년별_시간표', result.assignments); add('교사별_시간표', result.assignments); add('학생별_시간표', result.assignments); add('미배정', result.unassigned); add('검증결과', [...data.errors, ...data.warnings, ...result.issues]); XLSX.writeFile(wb, 'chronos_schedule.xlsx'); }
-export function printPdf() { window.print(); }

@@ -1,0 +1,12 @@
+export const GRADES=['G1','G2','G3','G4','G7E','G7K','G9','G12'] as const; export type Grade=typeof GRADES[number];
+export const TEACHERS=['목사님','민진','영찬','예을','이은총','재승','지애','홍성혜','희연'] as const; export type Teacher=typeof TEACHERS[number];
+export const DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday'] as const; export type Day=typeof DAYS[number];
+export const PERIODS=[1,2,3,4,5,6,7,8] as const; export const TIMES=['','09:00–09:40','09:45–10:25','10:30–11:10','11:15–11:55','13:05–13:45','13:50–14:30','14:35–15:15','15:20–16:00'];
+export type TeacherSem={kind:'named'|'all'|'flex'|'co'; teachers:Teacher[]; eligible:Teacher[]};
+export type ClassRow={id:string;subject:string;gradeExpr:string;grades:Grade[];teacherCell:string;teacher:TeacherSem;room:string;weekly:number;consecutive:boolean;afterSchool:boolean;morning:boolean;afternoon:boolean;meetings:Meeting[]};
+export type Meeting={id:string;classId:string;index:number;length:number}; export type Strict={classId:string; day:Day; start:number}; export type Availability=Record<Teacher,Record<Day,Record<number,boolean>>>;
+export type ConstraintImport={strict:Strict[]; availability:Availability; excluded:{type:string; reason:string; row:number}[]; warnings:string[]; activeStrict:number; activeAvailability:number; unmatchedStrict:number; unknownTeacherAvailability:number};
+export type ImportData={classes:ClassRow[]; errors:string[]; warnings:string[]; constraints?:ConstraintImport; stats:Stats};
+export type Stats={classRows:number; subjects:number; canonicalGrades:number; namedTeachers:number; rooms:number; meetings:number; periodUnits:number; consecutiveBlocks:number; afterSchoolRows:number; afterSchoolPeriods:number; gradeLoads:Record<Grade,{regular:number;after:number}>};
+export type Assignment={meetingId:string;classId:string;subject:string;grades:Grade[];teacher:Teacher; teachers:Teacher[];room:string;day:Day;start:number;length:number;afterSchool:boolean;preferenceViolations:number};
+export type SolveResult={status:string; elapsedMs:number; variableCount:number; constraintCount:number; objectiveValue:number; preferenceViolations:number; assignments:Assignment[]; diagnostics:Record<string,number>; messages:string[]};

@@ -1,0 +1,33 @@
+export function parseCsv(text) { text = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n'); const rows = []; let row = [], cell = '', q = false; for (let i = 0; i < text.length; i++) {
+    const c = text[i], n = text[i + 1];
+    if (q) {
+        if (c === '"' && n === '"') {
+            cell += '"';
+            i++;
+        }
+        else if (c === '"')
+            q = false;
+        else
+            cell += c;
+    }
+    else {
+        if (c === '"')
+            q = true;
+        else if (c === ',') {
+            row.push(cell);
+            cell = '';
+        }
+        else if (c === '\n') {
+            row.push(cell);
+            rows.push(row);
+            row = [];
+            cell = '';
+        }
+        else
+            cell += c;
+    }
+} if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+} const head = (rows.shift() || []).map(h => h.trim().replace(/^\uFEFF/, '')); return rows.filter(r => r.some(c => c.trim())).map(r => Object.fromEntries(head.map((h, i) => [h, (r[i] ?? '').trim()]))); }
+export function toCsv(rows, headers) { const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`; return '\uFEFF' + headers.join(',') + '\n' + rows.map(r => headers.map(h => esc(r[h])).join(',')).join('\n'); }
