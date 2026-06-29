@@ -1,0 +1,77 @@
+import { crossesLunch, DAYS, slotPeriod, slotRange } from './time.js';
+const regularCapacity = 35, period8Capacity = 5;
+function label(r, data) { return `${data.subjects.find(s => s.id === r.subjectId)?.name ?? r.subjectId} (${r.id})`; }
+function periodsOf(r) { return r.meetingLengths.reduce((a, b) => a + b, 0) || r.totalPeriodsPerWeek; }
+function isP8(r) { return r.afterSchool || r.allowedSlots.length > 0 && r.allowedSlots.every(s => slotPeriod(s) === 8) || r.fixedSlots.length > 0 && r.fixedSlots.every(s => slotPeriod(s) === 8); }
+function teacherIds(r, data) { const tr = r.teacherRule; if (!tr)
+    return r.teacherIds; if (tr.type === 'fixed')
+    return tr.teacherIds; if (tr.type === 'all-teachers')
+    return data.teachers.filter(t => t.category !== 'external').map(t => t.id); if (tr.type === 'role' && tr.roleId === 'student-council')
+    return data.roleMappings?.studentCouncil ? [data.roleMappings.studentCouncil] : []; if (tr.type === 'role' && tr.roleId === 'homeroom')
+    return r.gradeIds.map(g => data.roleMappings?.homeroomByGrade?.[g]).filter(Boolean); return r.teacherIds; }
+function possibleStarts(r) { if (r.fixedSlots.length)
+    return r.fixedSlots; const starts = DAYS.flatMap(d => (isP8(r) ? [8] : [1, 2, 3, 4, 5, 6, 7]).map(p => `${d}-${p}`)); const allowed = r.allowedSlots.length ? r.allowedSlots : starts; return starts.filter(s => allowed.includes(s) && !r.forbiddenSlots.includes(s) && r.meetingLengths.every(l => slotPeriod(s) + l - 1 <= 8 && !crossesLunch(s, l))); }
+export function analyzeFeasibility(data) {
+    const issues = [];
+    const mk = (id, name) => ({ id, name, regularRequired: 0, period8Required: 0, regularCapacity, period8Capacity, regularOverload: 0, period8Overload: 0, contributions: [] });
+    const grades = new Map(data.grades.map(g => [g.id, mk(g.id, g.name)]));
+    const teachers = new Map(data.teachers.map(t => [t.id, mk(t.id, t.name)]));
+    for (const r of data.requirements) {
+        const p = periodsOf(r), p8 = isP8(r), c = { requirementId: r.id, label: label(r, data), periods: p, slots: [...r.fixedSlots, ...r.allowedSlots] };
+        for (const g of r.gradeIds) {
+            const l = grades.get(g);
+            if (l) {
+                p8 ? l.period8Required += p : l.regularRequired += p;
+                l.contributions.push(c);
+            }
+        }
+        const tids = teacherIds(r, data);
+        const teacherWork = r.teacherRule?.type === 'choose-one' ? 0 : p;
+        for (const t of tids) {
+            const l = teachers.get(t);
+            if (l) {
+                p8 ? l.period8Required += teacherWork : l.regularRequired += teacherWork;
+                l.contributions.push({ ...c, periods: teacherWork });
+            }
+        }
+        if (r.teacherRule?.type === 'choose-one')
+            issues.push({ level: 'warning', code: 'choose-one-workload', message: `${r.id} choose-one workload ${p} periods is distributable among ${(r.teacherRule.candidateTeacherIds ?? []).join(', ')}` });
+        if (possibleStarts(r).length === 0)
+            issues.push({ level: 'error', code: 'zero-candidate-requirement', message: `${label(r, data)} has zero valid candidate slots`, context: { requirementId: r.id } });
+        if (isP8(r) && r.meetingsPerWeek > 5)
+            issues.push({ level: 'error', code: 'too-many-period-8-meetings', message: `${label(r, data)} needs ${r.meetingsPerWeek} period-8 meetings but only 5 days exist` });
+        if (r.allowedSlots.length && r.fixedSlots.some(s => !r.allowedSlots.includes(s)))
+            issues.push({ level: 'error', code: 'contradictory-fixed-allowed', message: `${label(r, data)} fixed slot is outside allowed slots` });
+        if (r.fixedSlots.some(s => r.forbiddenSlots.includes(s)))
+            issues.push({ level: 'error', code: 'contradictory-fixed-forbidden', message: `${label(r, data)} fixed slot is also forbidden` });
+        if (r.linkedNextRequirementId && r.fixedSlots[0]) {
+            const next = data.requirements.find(x => x.id === r.linkedNextRequirementId);
+            const total = (r.meetingLengths[0] ?? 1) + (next?.meetingLengths[0] ?? 1);
+            if (crossesLunch(r.fixedSlots[0], total))
+                issues.push({ level: 'error', code: 'linked-block-crosses-lunch', message: `${label(r, data)} linked block cannot cross lunch` });
+        }
+    }
+    const fixed = data.requirements.filter(r => r.fixedSlots.length);
+    for (let i = 0; i < fixed.length; i++)
+        for (let j = i + 1; j < fixed.length; j++) {
+            const a = fixed[i], b = fixed[j];
+            for (const sa of a.fixedSlots)
+                for (const sb of b.fixedSlots) {
+                    const ar = slotRange(sa, a.meetingLengths[0] ?? 1), br = slotRange(sb, b.meetingLengths[0] ?? 1);
+                    if (!ar.some(s => br.includes(s)))
+                        continue;
+                    if (a.gradeIds.some(g => b.gradeIds.includes(g)))
+                        issues.push({ level: 'error', code: 'fixed-grade-conflict', message: `Fixed grade conflict: ${a.id} and ${b.id}` });
+                    if (teacherIds(a, data).some(t => teacherIds(b, data).includes(t)))
+                        issues.push({ level: 'error', code: 'fixed-teacher-conflict', message: `Fixed teacher conflict: ${a.id} and ${b.id}` });
+                }
+        }
+    for (const l of [...grades.values(), ...teachers.values()]) {
+        l.regularOverload = Math.max(0, l.regularRequired - l.regularCapacity);
+        l.period8Overload = Math.max(0, l.period8Required - l.period8Capacity);
+        if (l.regularOverload || l.period8Overload)
+            issues.push({ level: 'error', code: 'capacity-overload', message: `${l.name} overloaded regular +${l.regularOverload}, period-8 +${l.period8Overload}` });
+    }
+    const score = issues.filter(i => i.level === 'error').length * 100 + issues.filter(i => i.level === 'warning').length;
+    return { gradeLoads: [...grades.values()], teacherLoads: [...teachers.values()], issues, score };
+}
