@@ -1,1 +1,23 @@
-{"type":"module","scripts":{"dev":"python3 -m http.server 5173 -d dist","build":"tsc -p tsconfig.json && cp index.html dist/index.html && cp *.csv dist/ 2>/dev/null || true","test":"node --test dist/test/*.test.js","lint":"tsc -p tsconfig.json --noEmit","test:e2e":"node --test dist/e2e/*.test.js"},"dependencies":{"papaparse":"optional-local-parser","glpk.js":"optional-worker-solver","xlsx":"optional-exporter"},"devDependencies":{}}
+{
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "glpk.js": "^4.0.2",
+    "papaparse": "^5.5.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4",
+    "@types/node": "^24.5.2"
+  }
+}
