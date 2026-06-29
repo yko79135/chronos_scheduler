@@ -18,13 +18,13 @@ export function parseGradeExpression(input, registered) { const raw = compact(St
     if (exact)
         out.add(exact);
     else if (canon) {
-        const same = registered.filter(g => canonicalGradeName(g) === canon);
-        if (same.length === 1)
-            same.forEach(g => out.add(g));
-        else if (same.length === 0) {
-            const n = gradeNumber(part);
-            registered.filter(g => gradeNumber(g) === n && !/[EK]$/i.test(g)).forEach(g => out.add(g));
-        }
+        const n = gradeNumber(part);
+        const sectioned = registered.filter(g => gradeNumber(g) === n && /[EK]$/i.test(compact(g)));
+        const plain = registered.filter(g => gradeNumber(g) === n && !/[EK]$/i.test(compact(g)));
+        if (canon === `G${n}` && plain.length === 0 && sectioned.length)
+            sectioned.forEach(g => out.add(g));
+        else
+            registered.filter(g => canonicalGradeName(g) === canon).forEach(g => out.add(g));
     }
 } return [...out]; }
 export function stableId(prefix, name) { return `${prefix}_${name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_|_$/g, '')}`; }

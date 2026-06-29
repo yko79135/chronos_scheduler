@@ -1,5 +1,5 @@
 import { crossesLunch, regularSlotKeys, slotDay, slotPeriod, slotRange } from './time.js';
-export function expandInstances(reqs, data) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => { const cohortStudents = (r.cohortIds ?? []).flatMap(id => data?.cohorts.find(c => c.id === id)?.studentIds ?? []); const gradeStudents = (r.gradeIds ?? []).flatMap(id => data?.grades.find(g => g.id === id)?.studentIds ?? []); return { id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds ?? [], cohortIds: r.cohortIds ?? [], studentIds: [...new Set([...cohortStudents, ...gradeStudents])], teacherIds: r.teacherIds, teacherRule: r.teacherRule, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool }; })); }
+export function expandInstances(reqs, data) { return reqs.flatMap(r => r.meetingLengths.map((len, i) => { const cohortStudents = (r.cohortIds ?? []).flatMap(id => data?.cohorts.find(c => c.id === id)?.studentIds ?? []); const gradeStudents = (r.gradeIds ?? []).flatMap(id => data?.grades.find(g => g.id === id)?.studentIds ?? []); return { id: `${r.id}_${i + 1}`, requirementId: r.id, subjectId: r.subjectId, gradeIds: r.gradeIds ?? [], cohortIds: r.cohortIds ?? [], studentIds: [...new Set([...cohortStudents, ...gradeStudents])], teacherIds: r.teacherIds, teacherRule: r.teacherRule, roomId: r.roomId, length: len, fixedStart: r.fixedSlots[i], afterSchool: r.afterSchool, linkedNextInstanceId: i === 0 && r.linkedNextRequirementId ? `${r.linkedNextRequirementId}_1` : undefined, linkedPreviousInstanceId: i === 0 && r.linkedPreviousRequirementId ? `${r.linkedPreviousRequirementId}_1` : undefined }; })); }
 function effectiveTeacherIds(inst, data, placed, start) { if (!inst.teacherRule)
     return inst.teacherIds; if (inst.teacherRule.type === 'fixed')
     return inst.teacherRule.teacherIds; if (inst.teacherRule.type === 'none' || inst.teacherRule.type === 'external')
@@ -8,8 +8,14 @@ function effectiveTeacherIds(inst, data, placed, start) { if (!inst.teacherRule)
     const slots = slotRange(start, inst.length);
     return [inst.teacherRule.candidateTeacherIds.find(t => !placed.some(a => a.teacherIds.includes(t) && slotRange(a.slot, a.length).some(s => slots.includes(s)))) ?? inst.teacherRule.candidateTeacherIds[0]].filter(Boolean);
 } if (inst.teacherRule.type === 'role') {
-    const mapped = data.roleMappings?.[inst.teacherRule.roleId];
-    return mapped ? [mapped] : [];
+    if (inst.teacherRule.roleId === 'student-council')
+        return data.roleMappings?.studentCouncil ? [data.roleMappings.studentCouncil] : [];
+    if (inst.teacherRule.roleId === 'homeroom') {
+        const gid = inst.gradeIds[0] ?? inst.cohortIds.flatMap(c => data.cohorts.find(x => x.id === c)?.gradeIds ?? [])[0];
+        const mapped = gid ? data.roleMappings?.homeroomByGrade?.[gid] : undefined;
+        return mapped ? [mapped] : [];
+    }
+    return [];
 } return inst.teacherIds; }
 function canPlace(a, inst, start, data) { const reasons = []; const slots = slotRange(start, inst.length); const teachers = effectiveTeacherIds(inst, data, a, start); if (crossesLunch(start, inst.length))
     reasons.push('점심시간을 가로지르는 연속수업'); if (!inst.afterSchool && slots.some(s => slotPeriod(s) > 7))
@@ -38,14 +44,23 @@ function score(a) { let p = 0; const byKey = new Map(); for (const x of a) {
     p += 10; v.sort((a, b) => a - b); for (let i = 1; i < v.length; i++)
     if (v[i] - v[i - 1] > 1)
         p += 1; }); return -p; }
-export function solveSchedule(data, opt) { const start = Date.now(); let nodes = 0, backtracks = 0; const issues = []; const all = expandInstances(data.requirements, data).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); let best = []; function search(idx, placed) { nodes++; if (nodes > opt.maxNodes || Date.now() - start > opt.maxSeconds * 1000)
+export function solveSchedule(data, opt) { const start = Date.now(); let nodes = 0, backtracks = 0; const issues = []; const all = expandInstances(data.requirements, data).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); let best = []; function asn(inst, s, placed) { return { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: effectiveTeacherIds(inst, data, placed, s), roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds }; } function search(idx, placed) { nodes++; if (nodes > opt.maxNodes || Date.now() - start > opt.maxSeconds * 1000)
     return false; if (placed.length > best.length || (placed.length === best.length && score(placed) > score(best)))
     best = [...placed]; if (idx >= all.length)
-    return true; const inst = all[idx]; const sorted = candidates(inst, data).sort((a, b) => slotPeriod(a) - slotPeriod(b)); for (const s of sorted) {
+    return true; const inst = all[idx]; if (placed.some(a => a.instanceId === inst.id) || inst.linkedPreviousInstanceId)
+    return search(idx + 1, placed); const sorted = candidates(inst, data).sort((a, b) => slotPeriod(a) - slotPeriod(b)); for (const s of sorted) {
     const why = canPlace(placed, inst, s, data);
     if (why.length === 0) {
-        const asn = { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: effectiveTeacherIds(inst, data, placed, s), roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds };
-        if (search(idx + 1, [...placed, asn]))
+        const first = asn(inst, s, placed);
+        let nextPlaced = [...placed, first];
+        if (inst.linkedNextInstanceId) {
+            const next = all.find(x => x.id === inst.linkedNextInstanceId);
+            const ns = slotRange(s, inst.length).at(-1).replace(/-(\d+)$/, (_, p) => `-${Number(p) + 1}`);
+            if (!next || slotDay(ns) !== slotDay(s) || canPlace(nextPlaced, next, ns, data).length)
+                continue;
+            nextPlaced = [...nextPlaced, asn(next, ns, nextPlaced)];
+        }
+        if (search(idx + 1, nextPlaced))
             return true;
     }
 } backtracks++; return opt.allowUnassigned ? search(idx + 1, placed) : false; } search(0, []); const assigned = new Set(best.map(a => a.instanceId)); const unassigned = all.filter(i => !assigned.has(i.id)); for (const u of unassigned) {

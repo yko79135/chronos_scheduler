@@ -230,7 +230,21 @@ export function normalizeWorkbook(p) {
                         diag.parsedRules.unmatched++;
                         issues.push({ level: 'error', code: 'consecutive-unmatched', message: `연속수업 '${line}'에 일치하는 수업이 없습니다.` });
                     }
-                    ids.forEach(id => { const rr = reqs.get(id); if (note) {
+                    ids.forEach(id => { const rr = reqs.get(id); if (note && /자습|Self Study/i.test(note)) {
+                        const selfName = '자습';
+                        const selfSid = stableId('sub', selfName);
+                        subjects.set(selfSid, sub(selfName));
+                        const selfId = `${id}_self_study_linked`;
+                        const teacherLed = Math.max(1, len - 1);
+                        rr.meetingLengths = [teacherLed, ...splitLengths(Math.max(0, rr.totalPeriodsPerWeek - len), Math.max(0, rr.meetingsPerWeek - 1))].filter(Boolean);
+                        rr.totalPeriodsPerWeek = Math.max(teacherLed, rr.totalPeriodsPerWeek - 1);
+                        rr.meetingsPerWeek = rr.meetingLengths.length;
+                        rr.consecutive = true;
+                        rr.linkedNextRequirementId = selfId;
+                        reqs.set(selfId, { ...rr, id: selfId, subjectId: selfSid, teacherIds: [], teacherRule: { type: 'none' }, totalPeriodsPerWeek: 1, meetingsPerWeek: 1, meetingLengths: [1], consecutive: false, linkedPreviousRequirementId: id, sourceRequirementIds: [selfId], status: 'ready', issues: [`복합 연속수업 '${line}'의 자습 교시`] });
+                        constraints.push({ id: `con_link_${id}`, type: 'linked-consecutive', targetRequirementIds: [id, selfId], value: { originalText: line, teacherLedLength: teacherLed, selfStudyLength: 1 }, hard: true, source: 'excel' });
+                    }
+                    else if (note) {
                         const msg = `확인 필요: 복합 연속수업 ${line}`;
                         rr.status = 'error';
                         rr.issues = [...(rr.issues ?? []), msg];
@@ -250,8 +264,7 @@ export function normalizeWorkbook(p) {
             }
         }
     }
-    const roleMappings = {};
-    roles.forEach(r => roleMappings[r] = null);
+    const roleMappings = { homeroomByGrade: Object.fromEntries([...grades.keys()].map(g => [g, ''])), studentCouncil: null };
     diag.teacherRoles = [...roles];
     const likely = new Set(['과학실험', '미술', '태권도', 'Drama', 'Musical', 'Debate', 'G9-12 SS (Online)', '학생회', '체육']);
     const bySubject = new Map();
