@@ -1,26 +1,28 @@
-export class SolverNotImplementedError extends Error {
-  constructor() {
-    super('Scheduler engine is temporarily disabled while correctness validation is completed.');
-    this.name = 'SolverNotImplementedError';
-  }
-}
+import { Availability, ClassRow, ConstraintImport, DAYS, Day, GRADES, PERIODS, SolveResult, Strict, TEACHERS, Teacher, Assignment } from './model.js';
 
-export function solve(): never {
-  throw new SolverNotImplementedError();
-}
+export type SolverStatus='READY'|'VALIDATION_ERROR'|'SOLVING'|'OPTIMAL'|'FEASIBLE'|'INFEASIBLE'|'SOLVER_ERROR'|'CANCELLED';
+type Preflight={errors:string[]; details:string[]};
+const lunchStart=4;
+const byId=(classes:ClassRow[])=>Object.fromEntries(classes.map(c=>[c.id,c]));
+const teachersFor=(c:ClassRow, chosen?:Teacher)=>c.teacher.kind==='all'?[...TEACHERS]:c.teacher.kind==='flex'?(chosen?[chosen]:[]):c.teacher.teachers;
+function units(a:{start:number;length:number}){return Array.from({length:a.length},(_,i)=>a.start+i)}
+function crossesLunch(start:number,length:number){return start<=lunchStart && start+length-1>lunchStart}
+export function preflight(classes:ClassRow[], constraints?:ConstraintImport):Preflight{const errors:string[]=[],details:string[]=[]; const map=byId(classes), counts:Record<string,number>={}; const strict=constraints?.strict??[]; for(const s of strict){const c=map[s.classId]; counts[s.classId]=(counts[s.classId]??0)+1; if(!DAYS.includes(s.day)) errors.push(`${s.classId}: fixed placement has unknown day`); if(!Number.isInteger(s.start)||s.start<1||s.start>8) errors.push(`${s.classId}: fixed placement outside the school day`); if(c){const len=c.meetings[0]?.length??1; if(crossesLunch(s.start,len)) errors.push(`${s.classId}: consecutive block crossing lunch`); if(!c.afterSchool && s.start===8) errors.push(`${s.classId}: regular class fixed to period 8`); if(c.afterSchool && s.start!==8) errors.push(`${s.classId}: after-school class fixed outside period 8`); for(const t of teachersFor(c)) for(const p of units({start:s.start,length:len})) if(constraints && !constraints.availability[t]?.[s.day]?.[p]) errors.push(`${s.classId}: fixed teacher unavailable (${t}, ${s.day} period ${p})`);} }
+ for(const c of classes) if((counts[c.id]??0)>c.meetings.length) errors.push(`${c.id}: more STRICT rows than meetings for a class`);
+ const groups=new Map<string,Strict[]>(); for(const s of strict){const c=map[s.classId]; const len=c?.meetings[0]?.length??1; for(const p of units({start:s.start,length:len})){const k=`${s.day}|${p}`; groups.set(k,[...(groups.get(k)??[]),s]);}}
+ for(const [k,ss] of groups){if(ss.length<2) continue; const [day,p]=k.split('|'); const grade=new Set<string>(), teacher=new Set<string>(), room=new Set<string>(), dup=new Set<string>(); for(let i=0;i<ss.length;i++)for(let j=i+1;j<ss.length;j++){const a=map[ss[i].classId],b=map[ss[j].classId]; if(!a||!b)continue; for(const g of a.grades) if(b.grades.includes(g)) grade.add(g); for(const t of teachersFor(a)) if(teachersFor(b).includes(t)) teacher.add(t); if(a.room===b.room) room.add(a.room); if(a.id===b.id) dup.add(a.id);} if(grade.size||teacher.size||room.size||dup.size){const names=[...new Set(ss.map(s=>s.classId))]; const lines=[`Fixed-placement conflict at ${day} period ${p}:`,'',...names.map(n=>`- ${n}`),'','Conflicts:',...[...grade].map(x=>`- Grade ${x}`),...[...teacher].map(x=>`- Teacher ${x}`),...[...room].map(x=>`- Room ${x}`),...[...dup].map(x=>`- Duplicate fixed occurrence ${x}`)]; errors.push(lines.join('\n')); details.push(lines.join('\n'));}}
+ return {errors,details};}
 
-export function validate() {
-  return {
-    assignedPeriodUnits: 0,
-    unassignedMeetings: 0,
-    gradeConflicts: 0,
-    teacherConflicts: 0,
-    roomConflicts: 0,
-    lunchCrossingBlocks: 0,
-    afterSchoolWrongPeriod: 0,
-    distinctDayErrors: 0,
-    globalEventErrors: 0,
-    flexTeacherErrors: 0,
-    specialTeacherTokenErrors: 0,
-  };
-}
+type Occ={meetingId:string; classId:string; length:number; strict?:Strict};
+export function solve(classes:ClassRow[], constraints?:ConstraintImport, cancelled=()=>false):SolveResult{const started=performance.now(); const pre=preflight(classes,constraints); if(pre.errors.length) return result('VALIDATION_ERROR',started,[],pre.errors,0,0); const av=constraints?.availability; const fixed=new Map<string,Strict[]>(); for(const s of constraints?.strict??[]) fixed.set(s.classId,[...(fixed.get(s.classId)??[]),s]); const occs:Occ[]=[]; for(const c of classes){const fs=[...(fixed.get(c.id)??[])]; for(const m of c.meetings) occs.push({meetingId:m.id,classId:c.id,length:m.length,strict:fs.shift()});}
+ const gradeBusy=new Set<string>(), teacherBusy=new Set<string>(), roomBusy=new Set<string>(), dayUsed=new Map<string,Set<Day>>(), flexChoice=new Map<string,Teacher>(), out:Assignment[]=[]; let vars=0, cons=classes.length+occs.length;
+ occs.sort((a,b)=>(a.strict?0:1)-(b.strict?0:1)||b.length-a.length);
+ function ok(c:ClassRow,day:Day,start:number,ts:Teacher[]){if(cancelled())return false; if(c.afterSchool?start!==8:start>7)return false; if(start<1||start+c.meetings[0].length-1>8||crossesLunch(start,aLen))return false; if(!c.afterSchool && start+aLen-1>7)return false; const used=dayUsed.get(c.id); if(!c.consecutive&&used?.has(day))return false; for(const p of units({start,length:aLen})){for(const g of c.grades) if(gradeBusy.has(`${day}|${p}|${g}`))return false; for(const t of ts){if(av&&!av[t]?.[day]?.[p])return false; if(teacherBusy.has(`${day}|${p}|${t}`))return false;} if(roomBusy.has(`${day}|${p}|${c.room}`))return false;} return true;}
+ let aLen=1;
+ function place(i:number):boolean{if(cancelled()) return false; if(i===occs.length)return true; const o=occs[i], c=byId(classes)[o.classId]; aLen=o.length; const days=o.strict?[o.strict.day]:[...DAYS]; const starts=o.strict?[o.strict.start]:(c.afterSchool?[8]:[1,2,3,5,6,7].filter(s=>s+aLen-1<=7&&!crossesLunch(s,aLen))); const elig=c.teacher.kind==='flex'?(flexChoice.has(c.id)?[flexChoice.get(c.id)!]:TEACHERS):[undefined as unknown as Teacher];
+ for(const day of days) for(const start of starts) for(const e of elig){const ts=teachersFor(c,e); vars++; if(!ok(c,day,start,ts))continue; for(const p of units({start,length:aLen})){for(const g of c.grades) gradeBusy.add(`${day}|${p}|${g}`); for(const t of ts) teacherBusy.add(`${day}|${p}|${t}`); roomBusy.add(`${day}|${p}|${c.room}`);} if(c.teacher.kind==='flex'&&!flexChoice.has(c.id)) flexChoice.set(c.id,e); if(!dayUsed.has(c.id))dayUsed.set(c.id,new Set()); dayUsed.get(c.id)!.add(day); out.push({meetingId:o.meetingId,classId:c.id,subject:c.subject,grades:c.grades,teacher:ts[0],teachers:ts,room:c.room,day,start,length:aLen,afterSchool:c.afterSchool,preferenceViolations:(c.morning&&start>=5)||(c.afternoon&&start<=4)?1:0}); if(place(i+1))return true; out.pop(); dayUsed.get(c.id)!.delete(day); if(c.teacher.kind==='flex'&&![...out].some(a=>a.classId===c.id)) flexChoice.delete(c.id); for(const p of units({start,length:aLen})){for(const g of c.grades) gradeBusy.delete(`${day}|${p}|${g}`); for(const t of ts) teacherBusy.delete(`${day}|${p}|${t}`); roomBusy.delete(`${day}|${p}|${c.room}`);}}
+ return false;}
+ const okSolve=place(0); if(cancelled()) return result('CANCELLED',started,out,['Cancelled'],vars,cons); if(!okSolve) return result('INFEASIBLE',started,out,['No feasible schedule found'],vars,cons); const val=validate(classes,out); if(Object.entries(val).some(([k,v])=>!['assignedMeetings','assignedPeriodUnits'].includes(k)&&v>0)||val.assignedMeetings!==occs.length) return result('SOLVER_ERROR',started,out,['Post-solve validation failed'],vars,cons,val); return result('FEASIBLE',started,out,[],vars,cons,val);}
+function result(status:string,started:number,assignments:Assignment[],messages:string[],variableCount:number,constraintCount:number,diagnostics:Record<string,number>={}):SolveResult{const pref=assignments.reduce((a,b)=>a+b.preferenceViolations,0); return {status,elapsedMs:Math.round(performance.now()-started),variableCount,constraintCount,objectiveValue:pref,preferenceViolations:pref,assignments,diagnostics,messages};}
+export function validate(classes:ClassRow[], assignments:Assignment[]){const total=classes.reduce((a,c)=>a+c.meetings.length,0), unitsTotal=classes.reduce((a,c)=>a+c.weekly,0); const grade=new Set<string>(),teacher=new Set<string>(),room=new Set<string>(); let gc=0,tc=0,rc=0,lunch=0,after=0,len=0,repeat=0,all=0,flex=0,special=0,periodUnits=0; const byClass=new Map<string,Assignment[]>(); for(const a of assignments){periodUnits+=a.length; byClass.set(a.classId,[...(byClass.get(a.classId)??[]),a]); const c=byId(classes)[a.classId]; if(c&&a.length!==c.meetings[0].length)len++; if(crossesLunch(a.start,a.length))lunch++; if(a.afterSchool?a.start!==8:a.start===8)after++; if(c?.teacher.kind==='all'&&a.teachers.length!==TEACHERS.length)all++; if(c?.teacher.kind==='flex'&&a.teachers.length!==1)flex++; for(const t of a.teachers) if(!TEACHERS.includes(t)) special++; for(const p of units(a)){for(const g of a.grades){const k=`${a.day}|${p}|${g}`; if(grade.has(k))gc++; grade.add(k)} for(const t of a.teachers){const k=`${a.day}|${p}|${t}`; if(teacher.has(k))tc++; teacher.add(k)} const rk=`${a.day}|${p}|${a.room}`; if(room.has(rk))rc++; room.add(rk)}} for(const [cid,as] of byClass){const c=byId(classes)[cid]; if(c&&!c.consecutive&&new Set(as.map(x=>x.day)).size!==as.length)repeat++; if(c?.teacher.kind==='flex'&&new Set(as.flatMap(x=>x.teachers)).size!==1)flex++;}
+ return {assignedMeetings:assignments.length,assignedPeriodUnits:periodUnits,expectedMeetings:total,expectedPeriodUnits:unitsTotal,gradeConflicts:gc,teacherConflicts:tc,roomConflicts:rc,lunchCrossingBlocks:lunch,afterSchoolWrongPeriod:after,consecutiveLengthErrors:len,repeatedDayErrors:repeat,globalAllTeacherErrors:all,flexibleTeacherErrors:flex,specialTeacherTokenErrors:special};}
