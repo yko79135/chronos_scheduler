@@ -195,7 +195,7 @@ export function normalizeWorkbook(p) {
                     if (ids.length > 1) {
                         const coid = stableId('cohort', `${subj}_${ids.length}_shared`);
                         cohorts.set(coid, { id: coid, name: `${subj} 공동`, gradeIds: gids, studentIds: [] });
-                        mergeRequirements(reqs, `shared_${stableId('sub', subj)}`, ids, [coid], gids, true);
+                        mergeRequirements(reqs, `shared_${stableId('sub', subj)}_${gids.slice().sort().join('_')}_${day}_${start}_${end}`, ids, [coid], gids, true);
                     }
                     const target = [...reqs.values()].filter(x => x.subjectId === stableId('sub', subj) && x.gradeIds.some(g => gids.includes(g))).map(x => x.id);
                     target.forEach(id => { const rr = reqs.get(id); rr.fixedSlots = [`${day}-${start}`]; rr.meetingLengths = [end - start + 1]; rr.meetingsPerWeek = 1; rr.totalPeriodsPerWeek = end - start + 1; rr.consecutive = end > start; rr.sharedClass = gids.length > 1; rr.eventType = 'fixed-event'; constraints.push({ id: `con_fix_${id}`, type: 'fixed-slot', targetRequirementIds: [id], value: { day, startPeriod: start, endPeriod: end, originalText: line }, hard: true, source: 'excel' }); });
