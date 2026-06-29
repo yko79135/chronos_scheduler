@@ -19,7 +19,7 @@ export interface NormalizedData{students:Student[];grades:GradeGroup[];cohorts:C
 export interface ValidationIssue{level:'error'|'warning';code:string;message:string;context?:Record<string,string|number|boolean>}
 export interface ClassInstance{id:string;requirementId:string;subjectId:string;gradeIds:string[];cohortIds:string[];studentIds:string[];teacherIds:string[];teacherRule?:TeacherRule;roomId?:string;length:number;fixedStart?:SlotKey;afterSchool:boolean;locked?:boolean;linkedNextInstanceId?:string;linkedPreviousInstanceId?:string}
 export type SlotKey=`${Day}-${number}`;
-export interface Assignment{instanceId:string;slot:SlotKey;length:number;subjectId:string;gradeIds:string[];cohortIds:string[];studentIds:string[];teacherIds:string[];roomId?:string;locked?:boolean;linkedNextInstanceId?:string;linkedPreviousInstanceId?:string}
+export interface Assignment{instanceId:string;requirementId:string;slot:SlotKey;length:number;subjectId:string;gradeIds:string[];cohortIds:string[];studentIds:string[];teacherIds:string[];roomId?:string;locked?:boolean;linkedNextInstanceId?:string;linkedPreviousInstanceId?:string}
 export interface SolveOptions{maxNodes:number;maxSeconds:number;seed:number;allowUnassigned:boolean;weights:Record<string,number>;preserveAssignments?:Assignment[];now?:()=>number}
 export interface SolveProgress{elapsedMs:number;nodes:number;backtracks:number;assigned:number;total:number;unassigned:number;assignedPeriods:number;totalPeriods:number;unassignedPeriods:number;bestScore:number;reason:string;seed?:number}
 export interface SolveResult{assignments:Assignment[];unassigned:ClassInstance[];issues:ValidationIssue[];progress:SolveProgress;score:number}

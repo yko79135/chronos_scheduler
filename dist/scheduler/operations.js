@@ -6,7 +6,7 @@ export function validateOperation(data, op) { const issues = []; const reqIds = 
     const rs = op.requirementIds.map(id => data.requirements.find(r => r.id === id)).filter(Boolean);
     if (rs.length > 1) {
         const [a] = rs;
-        if (rs.some(r => r.subjectId !== a.subjectId || r.totalPeriodsPerWeek !== a.totalPeriodsPerWeek || r.meetingsPerWeek !== a.meetingsPerWeek))
+        if (rs.some(r => r.subjectId !== a.subjectId || r.totalPeriodsPerWeek !== a.totalPeriodsPerWeek || r.meetingsPerWeek !== a.meetingsPerWeek || JSON.stringify(r.meetingLengths) !== JSON.stringify(a.meetingLengths) || r.afterSchool !== a.afterSchool || JSON.stringify(r.fixedSlots) !== JSON.stringify(a.fixedSlots)))
             issues.push({ level: 'error', code: 'incompatible-merge', message: '과목/시수/횟수가 다른 요구사항은 공동수업으로 병합할 수 없습니다.' });
     }
 } return issues; }
@@ -24,9 +24,19 @@ export function applyOperation(data, op) { const copy = JSON.parse(JSON.stringif
         keep.cohortIds = op.cohortIds;
         keep.gradeIds = [...new Set(rs.flatMap(r => r.gradeIds))];
         keep.sharedClass = true;
-        keep.sourceRequirementIds = rs.map(r => r.id);
+        keep.shared = true;
+        keep.eventType = 'shared-class';
+        keep.sourceRequirementIds = rs.flatMap(r => r.sourceRequirementIds ?? [r.id]);
+        keep.splitSourceRequirements = JSON.parse(JSON.stringify(rs));
         copy.requirements = reqs.filter(r => r.id === keep.id || !op.requirementIds.includes(r.id));
     }
-} if (op.type === 'split-shared-class')
-    copy.warnings.push({ level: 'warning', code: 'split-manual', message: `${op.sharedRequirementId} 공동수업 분리는 검토 화면에서 원본 요구사항으로 되돌려야 합니다.` }); return copy; }
+} if (op.type === 'split-shared-class') {
+    const idx = copy.requirements.findIndex(r => r.id === op.sharedRequirementId);
+    const r = copy.requirements[idx];
+    if (idx >= 0 && r.splitSourceRequirements?.length) {
+        copy.requirements.splice(idx, 1, ...JSON.parse(JSON.stringify(r.splitSourceRequirements)));
+    }
+    else
+        copy.warnings.push({ level: 'warning', code: 'split-manual', message: `${op.sharedRequirementId} 공동수업 원본을 찾을 수 없습니다.` });
+} return copy; }
 export function undoOperation(_before, after) { return JSON.parse(JSON.stringify(after)); }

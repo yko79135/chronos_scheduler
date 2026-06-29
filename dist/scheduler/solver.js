@@ -35,6 +35,10 @@ function canPlace(a, inst, start, data) { const reasons = []; const slots = slot
     reasons.push('forbidden-slot'); return [...new Set(reasons)]; }
 function candidates(inst, data) { if (inst.fixedStart)
     return [inst.fixedStart]; const starts = regularSlotKeys(inst.afterSchool).filter(s => slotPeriod(s) + inst.length - 1 <= 8 && !crossesLunch(s, inst.length)); const req = data.requirements.find(r => r.id === inst.requirementId); const allowed = req?.allowedSlots.length ? req.allowedSlots : starts; return starts.filter(s => allowed.includes(s)); }
+function seededHash(text, seed) { let h = 2166136261 ^ seed; for (const ch of text) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619);
+} return h >>> 0; }
 function score(a, data) { let p = 0; const byKey = new Map(); for (const x of a) {
     for (const g of x.gradeIds)
         byKey.set(`g:${g}:${x.subjectId}`, [...(byKey.get(`g:${g}:${x.subjectId}`) ?? []), ['월', '화', '수', '목', '금'].indexOf(slotDay(x.slot))]);
@@ -53,9 +57,9 @@ function score(a, data) { let p = 0; const byKey = new Map(); for (const x of a)
     }
 } return -p; }
 function cmp(a, b) { return a.periods - b.periods || a.instances - b.instances || a.priority - b.priority || a.soft - b.soft; }
-function objective(a, data) { const req = (id) => data.requirements.find(r => r.id === id.replace(/_\d+$/, '')); return { periods: a.reduce((n, x) => n + x.length, 0), instances: a.length, priority: a.reduce((n, x) => n + (req(x.instanceId)?.priority ?? 0), 0), soft: score(a, data) }; }
+function objective(a, data) { const req = (a) => data.requirements.find(r => r.id === a.requirementId); return { periods: a.reduce((n, x) => n + x.length, 0), instances: a.length, priority: a.reduce((n, x) => n + (req(x)?.priority ?? 0), 0), soft: score(a, data) }; }
 function better(a, b, data) { return cmp(objective(a, data), objective(b, data)) > 0; }
-export function solveSchedule(data, opt) { const now = opt.now ?? (() => Date.now()); const start = now(); let nodes = 0, backtracks = 0; const issues = []; let limit = null; const candCount = new Map(); const all = expandInstances(data.requirements, data).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); all.forEach(i => candCount.set(i.id, candidates(i, data).length)); const totalPeriods = all.reduce((n, i) => n + i.length, 0); let best = []; let exhausted = true; function asn(inst, s, placed) { return { instanceId: inst.id, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: effectiveTeacherIds(inst, data, placed, s), roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds, linkedNextInstanceId: inst.linkedNextInstanceId, linkedPreviousInstanceId: inst.linkedPreviousInstanceId }; } function update(placed) { if (better(placed, best, data))
+export function solveSchedule(data, opt) { const now = opt.now ?? (() => Date.now()); const start = now(); let nodes = 0, backtracks = 0; const issues = []; let limit = null; const candCount = new Map(); const all = expandInstances(data.requirements, data).sort((a, b) => candidates(a, data).length - candidates(b, data).length || b.length - a.length || b.gradeIds.length - a.gradeIds.length); all.forEach(i => candCount.set(i.id, candidates(i, data).length)); const totalPeriods = all.reduce((n, i) => n + i.length, 0); let best = []; let exhausted = true; function isMandatory(inst) { const r = data.requirements.find(x => x.id === inst.requirementId); return Boolean(inst.fixedStart || inst.afterSchool || inst.linkedNextInstanceId || inst.linkedPreviousInstanceId || r?.fixedSlots.length || r?.afterSchool); } function asn(inst, s, placed) { return { instanceId: inst.id, requirementId: inst.requirementId, slot: s, length: inst.length, subjectId: inst.subjectId, gradeIds: inst.gradeIds, teacherIds: effectiveTeacherIds(inst, data, placed, s), roomId: inst.roomId, cohortIds: inst.cohortIds, studentIds: inst.studentIds, linkedNextInstanceId: inst.linkedNextInstanceId, linkedPreviousInstanceId: inst.linkedPreviousInstanceId }; } function update(placed) { if (better(placed, best, data))
     best = [...placed]; } function remainingFrom(idx, placed) { const assigned = new Set(placed.map(a => a.instanceId)); const rem = all.slice(idx).filter(i => !assigned.has(i.id) && !i.linkedPreviousInstanceId); return { periods: rem.reduce((n, i) => n + i.length + (i.linkedNextInstanceId ? (all.find(x => x.id === i.linkedNextInstanceId)?.length ?? 0) : 0), 0), instances: rem.reduce((n, i) => n + 1 + (i.linkedNextInstanceId ? 1 : 0), 0), priority: rem.reduce((n, i) => n + (data.requirements.find(r => r.id === i.requirementId)?.priority ?? 0) + (i.linkedNextInstanceId ? (data.requirements.find(r => r.id === (all.find(x => x.id === i.linkedNextInstanceId)?.requirementId ?? ''))?.priority ?? 0) : 0), 0) }; } function checkLimit() { if (nodes >= opt.maxNodes) {
     limit = 'node-limit';
     exhausted = false;
@@ -71,7 +75,7 @@ export function solveSchedule(data, opt) { const now = opt.now ?? (() => Date.no
     return false;
 } if (idx >= all.length)
     return false; const inst = all[idx]; if (placed.some(a => a.instanceId === inst.id) || inst.linkedPreviousInstanceId)
-    return search(idx + 1, placed); const sorted = candidates(inst, data).sort((a, b) => { const req = data.requirements.find(r => r.id === inst.requirementId); const ap = slotRange(a, inst.length).filter(s => req?.preferredSlots.includes(s)).length; const bp = slotRange(b, inst.length).filter(s => req?.preferredSlots.includes(s)).length; return bp - ap || slotPeriod(a) - slotPeriod(b); }); for (const s of sorted) {
+    return search(idx + 1, placed); const sorted = candidates(inst, data).sort((a, b) => { const req = data.requirements.find(r => r.id === inst.requirementId); const ap = slotRange(a, inst.length).filter(s => req?.preferredSlots.includes(s)).length; const bp = slotRange(b, inst.length).filter(s => req?.preferredSlots.includes(s)).length; return bp - ap || slotPeriod(a) - slotPeriod(b) || seededHash(`${inst.id}:${a}`, opt.seed) - seededHash(`${inst.id}:${b}`, opt.seed); }); for (const s of sorted) {
     const why = canPlace(placed, inst, s, data);
     if (why.length === 0) {
         const first = asn(inst, s, placed);
@@ -79,7 +83,8 @@ export function solveSchedule(data, opt) { const now = opt.now ?? (() => Date.no
         if (inst.linkedNextInstanceId) {
             const next = all.find(x => x.id === inst.linkedNextInstanceId);
             const ns = slotRange(s, inst.length).at(-1).replace(/-(\d+)$/, (_, p) => `-${Number(p) + 1}`);
-            if (!next || slotDay(ns) !== slotDay(s) || canPlace(nextPlaced, next, ns, data).length) {
+            const combinedLength = inst.length + (next?.length ?? 0);
+            if (!next || slotDay(ns) !== slotDay(s) || crossesLunch(s, combinedLength) || canPlace(nextPlaced, next, ns, data).length) {
                 continue;
             }
             nextPlaced = [...nextPlaced, asn(next, ns, nextPlaced)];
@@ -87,11 +92,14 @@ export function solveSchedule(data, opt) { const now = opt.now ?? (() => Date.no
         if (search(idx + 1, nextPlaced))
             return true;
     }
-} backtracks++; return opt.allowUnassigned ? search(idx + 1, placed) : false; } search(0, []); const assigned = new Set(best.map(a => a.instanceId)); const unassigned = all.filter(i => !assigned.has(i.id)); const bestIds = new Set(best.map(a => a.instanceId)); for (const u of unassigned) {
+} backtracks++; if (isMandatory(inst)) {
+    issues.push({ level: 'error', code: 'mandatory-unplaced', message: `${inst.id} mandatory hard requirement cannot be placed` });
+    return false;
+} return opt.allowUnassigned ? search(idx + 1, placed) : false; } search(0, []); const assigned = new Set(best.map(a => a.instanceId)); const unassigned = all.filter(i => !assigned.has(i.id)); const bestIds = new Set(best.map(a => a.instanceId)); for (const u of unassigned) {
     if (u.linkedPreviousInstanceId && bestIds.has(u.linkedPreviousInstanceId))
         continue;
     const rs = candidates(u, data).flatMap(s => canPlace(best, u, s, data));
     const base = candCount.get(u.id) === 0 ? 'no-available-candidate-slots' : u.fixedStart ? 'fixed-slot-conflict' : rs.length ? [...new Set(rs)].slice(0, 4).join(', ') : (u.linkedPreviousInstanceId || u.linkedNextInstanceId) ? 'linked-requirement-failure' : limit ? 'search-budget-exhausted-before-placement' : 'not selected in best partial';
     issues.push({ level: 'error', code: 'unassigned', message: `${u.id} 배정 실패: ${base}` });
-} const obj = objective(best, data); const reason = unassigned.length === 0 ? 'complete' : limit ?? (exhausted ? 'optimal-partial' : 'partial-search-exhausted'); return { assignments: best, unassigned, issues, score: obj.soft, progress: { elapsedMs: now() - start, nodes, backtracks, assigned: best.length, total: all.length, unassigned: unassigned.length, assignedPeriods: obj.periods, totalPeriods, unassignedPeriods: totalPeriods - obj.periods, bestScore: obj.soft, reason, seed: opt.seed } }; }
+} const obj = objective(best, data); const mandatoryMissing = unassigned.filter(isMandatory); const reason = mandatoryMissing.length ? 'infeasible-hard-constraints' : unassigned.length === 0 ? 'complete' : limit ?? (exhausted ? 'optimal-partial' : 'partial-search-exhausted'); return { assignments: best, unassigned, issues, score: obj.soft, progress: { elapsedMs: now() - start, nodes, backtracks, assigned: best.length, total: all.length, unassigned: unassigned.length, assignedPeriods: obj.periods, totalPeriods, unassignedPeriods: totalPeriods - obj.periods, bestScore: obj.soft, reason, seed: opt.seed } }; }
 export { canPlace, candidates, objective };
