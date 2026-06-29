@@ -23,13 +23,23 @@ function parseTeacherRule(v, teachers, fullTimeIds, roles) { const raw = v.trim(
     return { rule: { type: 'role', roleId: 'student-council' }, ids: [] };
 } const ids = teacherNames(raw).map(n => { const id = stableId('tea', n); if (!teachers.has(id))
     teachers.set(id, mkTeacher(n, /목사/.test(n) ? 'pastor' : 'part-time')); return id; }); return { rule: { type: 'fixed', teacherIds: ids }, ids }; }
-function targetReqs(reqs, grades, subject) { return [...reqs.values()].filter(r => r.gradeIds.some(g => grades.includes(g)) && r.subjectId === stableId('sub', subject)).map(r => r.id); }
+const aliasPairs = [['Art', '미술'], ['Science Experiment', '과학실험'], ['Field Trip', '현장학습'], ['Math', '수학'], ['PE', '체육'], ['Worship', '예배'], ['Presentation', '발표']];
+function normSub(v) { return v.normalize('NFKC').toLowerCase().replace(/[\s\p{P}]+/gu, '').trim(); }
+function subjectKeys(subject) { const out = new Set([subject]); for (const [a, b] of aliasPairs) {
+    if (normSub(subject) === normSub(a))
+        out.add(b);
+    if (normSub(subject) === normSub(b))
+        out.add(a);
+} return [...out]; }
+function targetReqs(reqs, grades, subject) { const keys = subjectKeys(subject); return [...reqs.values()].filter(r => r.gradeIds.some(g => grades.includes(g)) && keys.some(k => r.subjectId === stableId('sub', k) || normSub(r.subjectId.replace(/^sub_/, '').replace(/_/g, ' ')) === normSub(k))).map(r => r.id); }
+function ruleItems(value) { return value.split(/,(?![^()]*\))/).map(x => x.trim()).filter(Boolean); }
+function fixedMatch(line) { return line.match(/^(?:(G[\dEK+\-]+)\s+)?(.+?)\s*(?:-\s*)?(월|화|수|목|금)(?:요일)?\s*(\d)(?:-(\d))?교시/); }
 function mergeRequirements(reqs, id, sourceIds, cohortIds, gradeIds, shared = true) { const bases = sourceIds.map(x => reqs.get(x)).filter(Boolean); if (!bases.length)
     return; const b = bases[0]; const merged = { ...b }; merged.id = id; merged.cohortIds = cohortIds; merged.gradeIds = gradeIds; merged.sharedClass = shared; merged.shared = shared; merged.eventType = 'fixed-event'; merged.sourceRequirementIds = sourceIds; reqs.set(id, merged); sourceIds.forEach(x => { if (x !== id)
     reqs.delete(x); }); }
 export function normalizeWorkbook(p) {
     const issues = [...p.warnings], students = [], grades = new Map(), cohorts = new Map(), subjects = new Map(), teachers = new Map(), reqs = new Map(), constraints = [], roles = new Set();
-    const diag = { sheetRanges: {}, headers: [], gradeBlocks: [], teacherBlocks: [], skippedBlocks: [], detectedSubjectCount: 0, detectedRequirementCount: 0, allocationTeacherAliases: [], needsMapping: [], fullTimeTeacherIds: [], teacherRoles: [], rawCourseRows: 0, weeklyTotals: {}, sharedSuggestions: [] };
+    const diag = { sheetRanges: {}, headers: [], gradeBlocks: [], teacherBlocks: [], skippedBlocks: [], detectedSubjectCount: 0, detectedRequirementCount: 0, allocationTeacherAliases: [], needsMapping: [], fullTimeTeacherIds: [], teacherRoles: [], rawCourseRows: 0, weeklyTotals: {}, sharedSuggestions: [], parsedRules: { fullTimeTeachers: [], eighthPeriod: [], fixed: [], afternoon: [], consecutive: [], matched: 0, ambiguous: 0, unmatched: 0, blockingErrors: [] } };
     const addGrade = (name, source) => { const canon = canonicalGradeName(name) ?? String(name).trim(); const gid = stableId('grade', canon); if (!grades.has(gid)) {
         grades.set(gid, { id: gid, name: canon, numericLevel: gradeNumber(canon), memberGradeIds: [gid], studentIds: [], source });
         cohorts.set(stableId('cohort', canon), { id: stableId('cohort', canon), name: canon, gradeIds: [gid], studentIds: [] });
@@ -45,7 +55,7 @@ export function normalizeWorkbook(p) {
                     diag.headers.push({ sheetName, headerRow: r + 1, startColumn: c + 1, kind: 'grade', headers: texts[r].slice(c, c + 4) });
                 if (rowHas(texts[r], c, ['학년', '수업', '주당 시간', '주 횟수']))
                     diag.headers.push({ sheetName, headerRow: r + 1, startColumn: c + 1, kind: 'teacher', headers: ['학년', '수업', '주당 시간', '주 횟수'] });
-                if (['풀타임 교사', '8교시 고정수업', '고정수업', '오후 선호 수업'].includes(texts[r][c]))
+                if (['풀타임 교사', '8교시 고정수업', '고정수업', '오후 선호 수업', '연속수업'].includes(texts[r][c]))
                     diag.headers.push({ sheetName, headerRow: r + 1, startColumn: c + 1, kind: 'rules', headers: [texts[r][c]] });
             }
         if (/학생/.test(sheetName)) {
@@ -64,8 +74,10 @@ export function normalizeWorkbook(p) {
         }
         for (const h of diag.headers.filter(h => h.sheetName === sheetName && h.kind === 'rules')) {
             const r = h.headerRow - 1, c = h.startColumn - 1, label = texts[r][c], value = texts[r].slice(c + 1).filter(Boolean).join('\n');
-            if (label === '풀타임 교사')
+            if (label === '풀타임 교사') {
                 fullTimeNames = teacherNames(value.replace(/\n/g, ','));
+                diag.parsedRules.fullTimeTeachers = fullTimeNames;
+            }
         }
         fullTimeNames.forEach(n => { const id = stableId('tea', n); teachers.set(id, mkTeacher(n, 'full-time')); });
         diag.fullTimeTeacherIds = fullTimeNames.map(n => stableId('tea', n));
@@ -147,39 +159,93 @@ export function normalizeWorkbook(p) {
         for (const h of diag.headers.filter(h => h.sheetName === sheetName && h.kind === 'rules')) {
             const r = h.headerRow - 1, c = h.startColumn - 1, label = texts[r][c], value = texts[r].slice(c + 1).filter(Boolean).join('\n');
             if (label === '8교시 고정수업') {
-                for (const line of value.split(/\n+/).map(x => x.trim()).filter(Boolean)) {
+                for (const line of ruleItems(value)) {
+                    diag.parsedRules.eighthPeriod.push(line);
                     const m = line.match(/^(G\d{1,2}[EK]?|G\d{1,2})\s+(.+)$/i);
-                    if (!m)
+                    if (!m) {
+                        diag.parsedRules.unmatched++;
                         continue;
+                    }
                     const gids = expand(m[1]);
                     const ids = targetReqs(reqs, gids, m[2]);
-                    ids.forEach(id => { reqs.get(id).afterSchool = true; reqs.get(id).allowedSlots = DAYS.map(d => `${d}-8`); constraints.push({ id: `con_8_${id}`, type: 'period-only', targetRequirementIds: [id], value: { periods: [8] }, hard: true, source: 'excel' }); });
+                    if (!ids.length) {
+                        diag.parsedRules.unmatched++;
+                        issues.push({ level: 'error', code: 'period8-unmatched', message: `8교시 고정수업 '${line}'에 일치하는 수업이 없습니다.` });
+                    }
+                    ids.forEach(id => { diag.parsedRules.matched++; reqs.get(id).afterSchool = true; reqs.get(id).allowedSlots = DAYS.map(d => `${d}-8`); constraints.push({ id: `con_8_${id}`, type: 'period-only', targetRequirementIds: [id], value: { periods: [8], originalText: line }, hard: true, source: 'excel' }); });
                 }
             }
             if (label === '고정수업') {
-                for (const line of value.split(/\n+/).map(x => x.trim()).filter(Boolean)) {
-                    const m = line.match(/^(?:(G[\dEK+\-]+)\s+)?(.+?)\s*-\s*(월|화|수|목|금)요일\s*(\d)(?:-(\d))?교시/);
-                    if (!m)
+                for (const line of ruleItems(value)) {
+                    diag.parsedRules.fixed.push(line);
+                    const m = fixedMatch(line);
+                    if (!m) {
+                        diag.parsedRules.unmatched++;
                         continue;
+                    }
                     const subj = m[2].trim(), day = m[3], start = Number(m[4]), end = Number(m[5] ?? m[4]);
                     const gids = m[1] ? expand(m[1].replace('G7-12', 'G7-12')) : getAllGradeIds();
                     const ids = targetReqs(reqs, gids, subj);
+                    if (!ids.length) {
+                        diag.parsedRules.unmatched++;
+                        issues.push({ level: 'error', code: 'fixed-unmatched', message: `고정수업 '${line}'에 일치하는 수업이 없습니다.` });
+                    }
+                    else
+                        diag.parsedRules.matched += ids.length;
                     if (ids.length > 1) {
                         const coid = stableId('cohort', `${subj}_${ids.length}_shared`);
                         cohorts.set(coid, { id: coid, name: `${subj} 공동`, gradeIds: gids, studentIds: [] });
                         mergeRequirements(reqs, `shared_${stableId('sub', subj)}`, ids, [coid], gids, true);
                     }
                     const target = [...reqs.values()].filter(x => x.subjectId === stableId('sub', subj) && x.gradeIds.some(g => gids.includes(g))).map(x => x.id);
-                    target.forEach(id => { const rr = reqs.get(id); rr.fixedSlots = [`${day}-${start}`]; rr.meetingLengths = [end - start + 1]; rr.meetingsPerWeek = 1; rr.totalPeriodsPerWeek = end - start + 1; rr.consecutive = end > start; rr.sharedClass = gids.length > 1; rr.eventType = 'fixed-event'; constraints.push({ id: `con_fix_${id}`, type: 'fixed-slot', targetRequirementIds: [id], value: { day, startPeriod: start, endPeriod: end }, hard: true, source: 'excel' }); });
+                    target.forEach(id => { const rr = reqs.get(id); rr.fixedSlots = [`${day}-${start}`]; rr.meetingLengths = [end - start + 1]; rr.meetingsPerWeek = 1; rr.totalPeriodsPerWeek = end - start + 1; rr.consecutive = end > start; rr.sharedClass = gids.length > 1; rr.eventType = 'fixed-event'; constraints.push({ id: `con_fix_${id}`, type: 'fixed-slot', targetRequirementIds: [id], value: { day, startPeriod: start, endPeriod: end, originalText: line }, hard: true, source: 'excel' }); });
                 }
             }
             if (label === '오후 선호 수업') {
-                for (const line of value.split(/\n+/).map(x => x.trim()).filter(Boolean)) {
+                for (const line of ruleItems(value)) {
+                    diag.parsedRules.afternoon.push(line);
                     const m = line.match(/^(.+)\s+(.+)$/);
-                    if (!m)
+                    if (!m) {
+                        diag.parsedRules.unmatched++;
                         continue;
+                    }
                     const gids = expand(m[1]), subject = m[2];
-                    targetReqs(reqs, gids, subject).forEach(id => { reqs.get(id).preferredSlots = DAYS.flatMap(d => [5, 6, 7].map(p => `${d}-${p}`)); constraints.push({ id: `con_pm_${id}`, type: 'preferred-period-range', targetRequirementIds: [id], value: { periods: [5, 6, 7] }, hard: false, source: 'excel' }); });
+                    const ids = targetReqs(reqs, gids, subject);
+                    if (!ids.length)
+                        diag.parsedRules.unmatched++;
+                    ids.forEach(id => { diag.parsedRules.matched++; reqs.get(id).preferredSlots = DAYS.flatMap(d => [5, 6, 7].map(p => `${d}-${p}`)); constraints.push({ id: `con_pm_${id}`, type: 'preferred-period-range', targetRequirementIds: [id], value: { periods: [5, 6, 7], weight: 5, originalText: line }, hard: false, source: 'excel' }); });
+                }
+            }
+            if (label === '연속수업') {
+                for (const line of ruleItems(value)) {
+                    diag.parsedRules.consecutive.push(line);
+                    const m = line.match(/^(G\d{1,2}[EK]?)\s+(.+)\((\d+)교시(?:[·\s]*(.+))?\)$/);
+                    if (!m) {
+                        diag.parsedRules.unmatched++;
+                        continue;
+                    }
+                    const gids = expand(m[1]), subject = m[2].trim(), len = Number(m[3]), note = m[4]?.trim();
+                    const ids = targetReqs(reqs, gids, subject);
+                    if (!ids.length) {
+                        diag.parsedRules.unmatched++;
+                        issues.push({ level: 'error', code: 'consecutive-unmatched', message: `연속수업 '${line}'에 일치하는 수업이 없습니다.` });
+                    }
+                    ids.forEach(id => { const rr = reqs.get(id); if (note) {
+                        const msg = `확인 필요: 복합 연속수업 ${line}`;
+                        rr.status = 'error';
+                        rr.issues = [...(rr.issues ?? []), msg];
+                        diag.parsedRules.blockingErrors.push(msg);
+                        issues.push({ level: 'error', code: 'composite-consecutive-unresolved', message: msg });
+                    }
+                    else if (rr.totalPeriodsPerWeek < len || rr.meetingsPerWeek < 1) {
+                        const msg = `연속수업 '${line}'이 수업 총량과 충돌합니다.`;
+                        diag.parsedRules.blockingErrors.push(msg);
+                        issues.push({ level: 'error', code: 'consecutive-conflict', message: msg });
+                    }
+                    else {
+                        rr.meetingLengths = [len, ...splitLengths(rr.totalPeriodsPerWeek - len, rr.meetingsPerWeek - 1)];
+                        rr.consecutive = true;
+                    } diag.parsedRules.matched++; constraints.push({ id: `con_seq_${id}`, type: 'consecutive', targetRequirementIds: [id], value: { blockLength: len, note, originalText: line }, hard: true, source: 'excel' }); });
                 }
             }
         }
