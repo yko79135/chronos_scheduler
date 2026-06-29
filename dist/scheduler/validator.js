@@ -1,5 +1,6 @@
 export function uniqueIssues(issues) { const seen = new Set(); return issues.filter(i => { const k = `${i.level}|${i.code}|${i.message}`; if (seen.has(k))
     return false; seen.add(k); return true; }); }
+export function combineIssues(...groups) { return uniqueIssues(groups.flat()); }
 export function isImportBlockingIssue(i) { return i.level === 'error' && !['unresolved-teacher-role', 'missing-homeroom-mapping', 'missing-student-council-mapping', 'invalid-teacher-mapping', 'unassigned'].includes(i.code); }
 export function validateData(data) { const out = [...data.errors, ...data.warnings]; const teacherIds = new Set(data.teachers.map(t => t.id)); for (const r of data.requirements) {
     if (r.teacherRule?.type === 'role') {
@@ -30,4 +31,6 @@ export function validateData(data) { const out = [...data.errors, ...data.warnin
     if (r.totalPeriodsPerWeek !== r.meetingLengths.reduce((a, b) => a + b, 0))
         out.push({ level: 'error', code: 'hours-mismatch', message: `${r.id} 블록 합계가 요구 시수와 다릅니다.` });
 } return uniqueIssues(out); }
-export function validateResult(data, result) { return uniqueIssues(result.issues); }
+export function validateResult(data, result) { const out = []; const ids = new Set(data.requirements.flatMap(r => r.meetingLengths.map((_, i) => `${r.id}_${i + 1}`))); for (const a of result.assignments)
+    if (!ids.has(a.instanceId))
+        out.push({ level: 'error', code: 'unknown-assignment', message: `알 수 없는 배정 ${a.instanceId}` }); return uniqueIssues(out); }
