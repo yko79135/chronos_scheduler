@@ -1,71 +1,20 @@
 import './styles.css';
 import { importClasses, importConstraints, populatedConstraintTemplate } from './importer.js';
-import { GRADES, ImportData } from './model.js';
+import { GRADES, ImportData, SolveResult } from './model.js';
+import { preflight } from './solver.js';
 
-const SOLVER_DISABLED_MESSAGE = 'Scheduler engine is temporarily disabled while correctness validation is completed.';
 const buildVersion = import.meta.env.VITE_GIT_COMMIT || import.meta.env.MODE;
-let data: ImportData | null = null;
+let data: ImportData | null = null, solveResult:SolveResult|null=null, worker:Worker|null=null, solving=false, started=0, ticker=0;
 const app = document.getElementById('app');
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]!);
-}
-
-function bootError(error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
-  const stack = error instanceof Error ? error.stack : '';
-  const target = document.getElementById('app') ?? document.body;
-  target.innerHTML = `<section class="boot-error" role="alert"><h1>Chronos Scheduler could not start</h1><p>${escapeHtml(message)}</p><p><small>Build: ${escapeHtml(buildVersion)}</small></p>${import.meta.env.DEV && stack ? `<pre>${escapeHtml(stack)}</pre>` : ''}</section>`;
-}
-
-window.addEventListener('error', (event) => bootError(event.error ?? event.message));
-window.addEventListener('unhandledrejection', (event) => bootError(event.reason));
-
-const read = (file: File) => file.text();
-const stat = (label: string, value: unknown) => `<div class="card"><b>${escapeHtml(label)}</b><strong>${escapeHtml(value)}</strong></div>`;
-
-function render(): void {
-  if (!app) throw new Error('Missing #app root element');
-  app.innerHTML = `<header><h1>Chronos Scheduler</h1><p>CSV importing is available. Each class CSV row is treated as one atomic class; the scheduling engine is disabled pending correctness validation.</p></header><main><section class="panel"><h2>Import CSVs</h2><label>Class CSV<input id="classes" type="file" accept=".csv,text/csv" /></label><label>Constraint CSV<input id="constraints" type="file" accept=".csv,text/csv" /></label><button id="template" ${data ? '' : 'disabled'}>Download populated constraint template</button><button id="generate" disabled>Generate</button><p class="warn" id="solver-disabled">${SOLVER_DISABLED_MESSAGE}</p></section>${data ? review() : ''}</main>`;
-  bind();
-}
-
-function review(): string {
-  const s = data!.stats;
-  const c = data!.constraints;
-  return `<section class="panel"><h2>Import Review</h2><div class="grid">${stat('class rows imported', s.classRows)}${stat('subjects', s.subjects)}${stat('canonical grades', s.canonicalGrades)}${stat('named teachers', s.namedTeachers)}${stat('rooms', s.rooms)}${stat('inferred meetings', s.meetings)}${stat('total period units', s.periodUnits)}${stat('consecutive blocks', s.consecutiveBlocks)}${stat('after-school class rows', s.afterSchoolRows)}${stat('after-school meeting periods', s.afterSchoolPeriods)}${stat('active strict constraints', c?.activeStrict ?? 0)}${stat('active availability constraints', c?.activeAvailability ?? 0)}${stat('excluded constraint rows', c?.excluded.length ?? 0)}${stat('validation errors', data!.errors.length)}${stat('warnings', data!.warnings.length + (c?.warnings.length ?? 0))}</div>${c?.warnings.map((w) => `<p class="warn">${escapeHtml(w)}</p>`).join('') ?? ''}<h3>Grade loads</h3><table><tbody>${GRADES.map((g) => `<tr><td>${g}</td><td>${s.gradeLoads[g].regular} regular</td><td>${s.gradeLoads[g].after} period-8</td></tr>`).join('')}</tbody></table><h3>Normalized Classes</h3><table><thead><tr><th>ID</th><th>subject</th><th>original grade expression</th><th>expanded grades</th><th>teacher semantics</th><th>room</th><th>weekly</th><th>generated meeting pattern</th><th>period type</th><th>preference</th></tr></thead><tbody>${data!.classes.map((x) => `<tr><td>${escapeHtml(x.id)}</td><td>${escapeHtml(x.subject)}</td><td>${escapeHtml(x.gradeExpr)}</td><td>${escapeHtml(x.grades.join(', '))}</td><td>${escapeHtml(x.teacher.kind === 'co' ? 'Both teachers are required and will be occupied simultaneously.' : x.teacherCell)}</td><td>${escapeHtml(x.room)}</td><td>${x.weekly}</td><td>${escapeHtml(x.meetings.map((m) => `${m.length} period`).join(' + '))}</td><td>${x.afterSchool ? 'after-school' : 'regular'}</td><td>${x.morning ? 'morning' : x.afternoon ? 'afternoon' : 'none'}</td></tr>`).join('')}</tbody></table></section>`;
-}
-
-function bind(): void {
-  document.getElementById('classes')?.addEventListener('change', async (event) => {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (file) {
-      data = importClasses(await read(file));
-      render();
-    }
-  });
-  document.getElementById('constraints')?.addEventListener('change', async (event) => {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (file && data) {
-      data.constraints = importConstraints(await read(file), data.classes);
-      render();
-    }
-  });
-  document.getElementById('template')?.addEventListener('click', () => {
-    if (data) download('populated_constraints.csv', populatedConstraintTemplate(data.classes), 'text/csv');
-  });
-}
-
-function download(name: string, content: string, type: string): void {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type }));
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-try {
-  render();
-} catch (error) {
-  bootError(error);
-}
+const escapeHtml=(v:unknown)=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]!));
+function bootError(error: unknown): void {const message = error instanceof Error ? error.message : String(error); const target = document.getElementById('app') ?? document.body; target.innerHTML = `<section class="boot-error" role="alert"><h1>Chronos Scheduler could not start</h1><p>${escapeHtml(message)}</p><p><small>Build: ${escapeHtml(buildVersion)}</small></p></section>`;}
+window.addEventListener('error', e => bootError(e.error ?? e.message)); window.addEventListener('unhandledrejection', e => bootError(e.reason));
+const read=(file:File)=>file.text(); const stat=(label:string,value:unknown)=>`<div class="card"><b>${escapeHtml(label)}</b><strong>${escapeHtml(value)}</strong></div>`;
+function pf(){return data?preflight(data.classes,data.constraints):{errors:[],details:[]};}
+function canGenerate(){return !!data && data.errors.length===0 && pf().errors.length===0 && !solving;}
+function render(): void { if (!app) throw new Error('Missing #app root element'); const enabled=canGenerate(); app.innerHTML = `<header><h1>Chronos Scheduler</h1><p>Import valid CSVs, validate hard constraints, then generate a GLPK-backed schedule in a Web Worker.</p></header><main><section class="panel"><h2>Import CSVs</h2><label>Class CSV<input id="classes" type="file" accept=".csv,text/csv" /></label><label>Constraint CSV<input id="constraints" type="file" accept=".csv,text/csv" /></label><button id="template" ${data ? '' : 'disabled'}>Download populated constraint template</button><button id="generate" ${enabled ? '' : 'disabled'}>Generate</button>${solving?'<button id="cancel">Cancel</button>':''}<p id="status">Status: ${solving?'SOLVING':(pf().errors.length?'VALIDATION_ERROR':'READY')}</p>${solving?`<p>Solving… elapsed time <span id="elapsed">${Math.round((performance.now()-started)/1000)}s</span></p>`:''}</section>${data ? review() : ''}${solveResult?results():''}</main>`; bind(); }
+function review(): string {const s=data!.stats,c=data!.constraints,p=pf(); return `<section class="panel"><h2>Import Review</h2><div class="grid">${stat('class rows imported',s.classRows)}${stat('subjects',s.subjects)}${stat('canonical grades',s.canonicalGrades)}${stat('named teachers',s.namedTeachers)}${stat('rooms',s.rooms)}${stat('inferred meetings',s.meetings)}${stat('total period units',s.periodUnits)}${stat('active strict constraints',c?.activeStrict??0)}${stat('active availability constraints',c?.activeAvailability??0)}${stat('validation errors',data!.errors.length)}${stat('preflight hard errors',p.errors.length)}</div>${data!.errors.map(e=>`<pre class="error">${escapeHtml(e)}</pre>`).join('')}${p.errors.map(e=>`<pre class="error">${escapeHtml(e)}</pre>`).join('')}${c?.warnings.map(w=>`<p class="warn">${escapeHtml(w)}</p>`).join('')??''}<h3>Grade loads</h3><table><tbody>${GRADES.map(g=>`<tr><td>${g}</td><td>${s.gradeLoads[g].regular} regular</td><td>${s.gradeLoads[g].after} period-8</td></tr>`).join('')}</tbody></table><h3>Normalized Classes</h3><table><tbody>${data!.classes.map(x=>`<tr><td>${escapeHtml(x.id)}</td><td>${escapeHtml(x.subject)}</td><td>${escapeHtml(x.grades.join(', '))}</td><td>${escapeHtml(x.teacherCell)}</td><td>${escapeHtml(x.room)}</td><td>${x.weekly}</td></tr>`).join('')}</tbody></table></section>`;}
+function results(){const r=solveResult!; const d=r.diagnostics; const days=['Monday','Tuesday','Wednesday','Thursday','Friday']; const cells=(filter:(a:any)=>boolean)=>`<table><thead><tr><th></th>${days.map(d=>`<th>${d}</th>`).join('')}</tr></thead><tbody>${[1,2,3,4,5,6,7,8].map(p=>`<tr><th>${p}</th>${days.map(day=>`<td>${r.assignments.filter(a=>filter(a)&&a.day===day&&a.start<=p&&a.start+a.length-1>=p).map(a=>`${escapeHtml(a.subject)}<br>${escapeHtml(a.classId)}<br>${escapeHtml(a.teachers.join(','))}${a.start<p?' (cont.)':''}`).join('<hr>')}</td>`).join('')}</tr>`).join('')}</tbody></table>`; return `<section class="panel"><h2>Solver Result: ${escapeHtml(r.status)}</h2><div class="grid">${stat('assigned meetings',`${d.assignedMeetings}/${d.expectedMeetings}`)}${stat('assigned period units',`${d.assignedPeriodUnits}/${d.expectedPeriodUnits}`)}${stat('grade conflicts',d.gradeConflicts)}${stat('teacher conflicts',d.teacherConflicts)}${stat('room conflicts',d.roomConflicts)}${stat('model variable count',r.variableCount)}${stat('model constraint count',r.constraintCount)}${stat('objective value',r.objectiveValue)}${stat('preference violations',r.preferenceViolations)}</div>${r.messages.map(m=>`<pre class="error">${escapeHtml(m)}</pre>`).join('')}<h3>Validation summary</h3><pre>${escapeHtml(JSON.stringify(d,null,2))}</pre><h3>Master timetable</h3>${cells(()=>true)}<h3>Grade timetables</h3>${GRADES.map(g=>`<h4>${g}</h4>${cells(a=>a.grades.includes(g))}`).join('')}<h3>Teacher timetables</h3>${[...new Set(r.assignments.flatMap(a=>a.teachers))].map(t=>`<h4>${escapeHtml(t)}</h4>${cells(a=>a.teachers.includes(t))}`).join('')}<h3>Room timetables</h3>${[...new Set(r.assignments.map(a=>a.room))].map(room=>`<h4>${escapeHtml(room)}</h4>${cells(a=>a.room===room)}`).join('')}</section>`;}
+function bind(): void {document.getElementById('classes')?.addEventListener('change',async e=>{const file=(e.target as HTMLInputElement).files?.[0]; if(file){data=importClasses(await read(file)); solveResult=null; render();}}); document.getElementById('constraints')?.addEventListener('change',async e=>{const file=(e.target as HTMLInputElement).files?.[0]; if(file&&data){data.constraints=importConstraints(await read(file),data.classes); solveResult=null; render();}}); document.getElementById('template')?.addEventListener('click',()=>{if(data)download('populated_constraints.csv',populatedConstraintTemplate(data.classes),'text/csv')}); document.getElementById('generate')?.addEventListener('click',startSolve); document.getElementById('cancel')?.addEventListener('click',()=>{worker?.postMessage({type:'cancel'});});}
+function startSolve(){if(!data||!canGenerate())return; solving=true; started=performance.now(); render(); worker=new Worker(new URL('./solver.worker.ts',import.meta.url),{type:'module'}); worker.onmessage=e=>{solveResult=e.data; solving=false; worker?.terminate(); worker=null; clearInterval(ticker); render();}; worker.onerror=e=>{solveResult={status:'SOLVER_ERROR',messages:[e.message],assignments:[],diagnostics:{},elapsedMs:0,variableCount:0,constraintCount:0,objectiveValue:0,preferenceViolations:0}; solving=false; render();}; ticker=window.setInterval(()=>{const el=document.getElementById('elapsed'); if(el)el.textContent=`${Math.round((performance.now()-started)/1000)}s`;},500); worker.postMessage({classes:data.classes,constraints:data.constraints});}
+function download(name:string,content:string,type:string){const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name; a.click(); URL.revokeObjectURL(a.href);} try{render();}catch(error){bootError(error);}
